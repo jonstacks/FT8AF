@@ -56,6 +56,13 @@ public class UsbAudioDevice {
 
     public interface AudioInputCallback {
         void onAudioData(float[] data, int length);
+        /**
+         * Fired on a worker thread when the capture loop exits without
+         * stopCapture() being called — e.g. the USB device was disconnected
+         * or the kernel returned a null URB. Default is a no-op so existing
+         * callers compile unchanged.
+         */
+        default void onCaptureStopped() {}
     }
 
     /**
@@ -359,6 +366,18 @@ public class UsbAudioDevice {
                     try { requests[i].close(); } catch (Exception ignored) {}
                 }
             }
+            // If `capturing` is still true here, we exited without an explicit
+            // stopCapture() — the device died on us. Notify upstream so the
+            // recorder can rebind (e.g. fall back to the built-in mic) instead
+            // of stalling on a dead handle forever.
+            boolean abnormalExit = capturing;
+            capturing = false;
+            if (abnormalExit && callback != null) {
+                final AudioInputCallback cb = callback;
+                new Thread(() -> {
+                    try { cb.onCaptureStopped(); } catch (Exception ignored) {}
+                }, "USB-Audio-Capture-Stopped").start();
+            }
         }
     }
 
@@ -411,23 +430,40 @@ public class UsbAudioDevice {
             buf.put(pcmData, offset, chunkSize);
             buf.flip();
 
+            // Whole iteration is guarded: if the underlying USB connection has
+            // been torn down (cable yanked, kernel renumeration, selective
+            // suspend), initialize() returns false and queue()/requestWait()
+            // throw IllegalStateException. Catching here turns a fatal process
+            // crash into a clean TX abort that the caller already handles.
             UsbRequest request = new UsbRequest();
-            request.initialize(connection, endpointOut);
-            boolean queued;
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                queued = request.queue(buf);
-            } else {
-                queued = request.queue(buf, chunkSize);
-            }
-            if (!queued) {
-                Log.e(TAG, "Failed to queue output URB at offset " + offset);
-                request.close();
-                return false;
-            }
+            try {
+                if (!request.initialize(connection, endpointOut)) {
+                    Log.e(TAG, "request.initialize returned false at offset " + offset
+                            + " (USB connection likely closed)");
+                    try { request.close(); } catch (Exception ignored) {}
+                    return false;
+                }
 
-            UsbRequest completed = connection.requestWait();
-            if (completed != null) {
-                completed.close();
+                boolean queued;
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    queued = request.queue(buf);
+                } else {
+                    queued = request.queue(buf, chunkSize);
+                }
+                if (!queued) {
+                    Log.e(TAG, "Failed to queue output URB at offset " + offset);
+                    try { request.close(); } catch (Exception ignored) {}
+                    return false;
+                }
+
+                UsbRequest completed = connection.requestWait();
+                if (completed != null) {
+                    try { completed.close(); } catch (Exception ignored) {}
+                }
+            } catch (IllegalStateException | NullPointerException e) {
+                Log.e(TAG, "writeAudio aborting at offset " + offset + ": " + e.getMessage());
+                try { request.close(); } catch (Exception ignored) {}
+                return false;
             }
 
             offset += chunkSize;

@@ -141,12 +141,23 @@ public class MicRecorder {
     }
 
     private void startUsbCapture() {
+        final MicRecorder self = this;
         usbAudioDevice.startCapture(sampleRateInHz, new UsbAudioDevice.AudioInputCallback() {
             @Override
             public void onAudioData(float[] data, int length) {
                 if (isRunning && onDataListener != null) {
                     onDataListener.onDataReceived(data, length);
                 }
+            }
+
+            @Override
+            public void onCaptureStopped() {
+                // The USB audio device died (cable yank, suspend, etc). Without
+                // this, the decode loop's getVoiceData() callback never fires
+                // and the waterfall just stops. reinitialize() either reopens
+                // a fresh USB handle or falls back to the built-in mic.
+                Log.w(TAG, "USB audio capture stopped unexpectedly, reinitializing");
+                self.reinitialize();
             }
         });
     }
