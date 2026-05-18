@@ -63,9 +63,6 @@ fun FT8USApp(mainViewModel: MainViewModel) {
     } else {
         GeneralVariables.getBandString()
     }
-    val baseFreq by GeneralVariables.mutableBaseFrequency.observeAsState(GeneralVariables.getBaseFrequency())
-    val frequencyMhz = String.format("%.0f", baseFreq ?: GeneralVariables.getBaseFrequency())
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -100,7 +97,6 @@ fun FT8USApp(mainViewModel: MainViewModel) {
             isTransmitting = isTransmitting,
             isActivated = isActivated,
             bandLabel = bandLabel,
-            frequencyMhz = frequencyMhz,
             txSlot = txSlot,
             expanded = qsoPanelExpanded,
             onCallCQ = {
