@@ -195,12 +195,20 @@ private fun BandTileGrid(
         for (row in rows) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (g in row) {
+                    // If an alternate within this group is the active selection,
+                    // surface that on the tile so the user doesn't have to open the
+                    // alternates list to see what's tuned.
+                    val selectedAlt = g.alternates.firstOrNull { it.first == currentBandIndex }
+                    val isSelected = g.primaryIndex == currentBandIndex || selectedAlt != null
+                    val displayFreqHz = selectedAlt?.second ?: g.primaryFreqHz
+                    val tapIndex = selectedAlt?.first ?: g.primaryIndex
                     BandTile(
-                        group = g,
-                        isSelected = g.primaryIndex == currentBandIndex ||
-                            g.alternates.any { it.first == currentBandIndex },
+                        waveLength = g.waveLength,
+                        freqHz = displayFreqHz,
+                        isSelected = isSelected,
+                        isAlternate = selectedAlt != null,
                         modifier = Modifier.weight(1f),
-                        onClick = { onTileClick(g.primaryIndex) },
+                        onClick = { onTileClick(tapIndex) },
                     )
                 }
                 // Pad incomplete row with empty weights so tiles stay sized consistently.
@@ -214,8 +222,10 @@ private fun BandTileGrid(
 
 @Composable
 private fun BandTile(
-    group: BandGroup,
+    waveLength: String,
+    freqHz: Long,
     isSelected: Boolean,
+    isAlternate: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -233,19 +243,31 @@ private fun BandTile(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = group.waveLength,
+                text = waveLength,
                 color = bandColor,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = GeistMonoFamily,
             )
             Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = formatMhz(group.primaryFreqHz),
-                color = freqColor,
-                fontSize = 11.sp,
-                fontFamily = GeistMonoFamily,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isAlternate) {
+                    Text(
+                        text = "ALT ",
+                        color = freqColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = GeistMonoFamily,
+                        letterSpacing = 0.08.sp,
+                    )
+                }
+                Text(
+                    text = formatMhz(freqHz),
+                    color = freqColor,
+                    fontSize = 11.sp,
+                    fontFamily = GeistMonoFamily,
+                )
+            }
         }
     }
 }
