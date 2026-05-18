@@ -76,6 +76,7 @@ import radio.ks3ckc.ft8us.theme.*
 import radio.ks3ckc.ft8us.ui.components.GlassCard
 import radio.ks3ckc.ft8us.ui.components.SettingsRow
 import radio.ks3ckc.ft8us.ui.components.TopBar
+import radio.ks3ckc.ft8us.ui.components.selectBandIndex
 
 /**
  * Settings screen that replaces the legacy ConfigFragment.
@@ -313,30 +314,7 @@ fun SettingsScreen(
             onDismiss = { showBandPicker = false },
             onSelect = { index ->
                 showBandPicker = false
-                GeneralVariables.bandListIndex = index
-                GeneralVariables.band = OperationBand.getBandFreq(index)
-                mainViewModel.databaseOpr.writeConfig(
-                    "bandFreq", GeneralVariables.band.toString(), null,
-                )
-                mainViewModel.databaseOpr.getAllQSLCallsigns()
-                val cm = GeneralVariables.controlMode
-                val connected = mainViewModel.isRigConnected()
-                android.util.Log.d("SettingsScreen",
-                    "bandSelect: index=$index, band=${GeneralVariables.band}, " +
-                    "controlMode=$cm, rigConnected=$connected")
-                try {
-                    val dir = context.getExternalFilesDir(null)
-                    if (dir != null) {
-                        val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
-                            .format(java.util.Date())
-                        java.io.File(dir, "debug.log").appendText(
-                            "$ts bandSelect: index=$index, band=${GeneralVariables.band}, " +
-                            "controlMode=$cm, rigConnected=$connected\n")
-                    }
-                } catch (_: Exception) {}
-                if (cm == ControlMode.CAT || cm == ControlMode.RTS || cm == ControlMode.DTR) {
-                    mainViewModel.setOperationBand()
-                }
+                selectBandIndex(mainViewModel, context, index)
             },
         )
     }
