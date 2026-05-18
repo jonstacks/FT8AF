@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.database.OperationBand
+import com.bg7yoz.ft8cn.rigs.BaseRigOperation
 import radio.ks3ckc.ft8us.theme.BgApp
 import radio.ks3ckc.ft8us.ui.components.ActiveQsoPanel
 import radio.ks3ckc.ft8us.ui.components.FT8USTab
@@ -61,25 +62,22 @@ fun FT8USApp(mainViewModel: MainViewModel) {
         }
     }
 
-    // Derive band/frequency from GeneralVariables
+    // Pill label combines MHz frequency and band name, e.g. "14.074 MHz · 20m".
+    // bandIndex is observed so the pill recomposes when the user retunes.
     val bandIndex by GeneralVariables.mutableBandChange.observeAsState(GeneralVariables.bandListIndex)
-    val bandLabel = if (bandIndex >= 0 && mainViewModel.operationBand != null) {
-        try {
-            OperationBand.getBandInfo(bandIndex)
-        } catch (_: Exception) {
-            GeneralVariables.getBandString()
+    val freq = GeneralVariables.band
+    val bandName = OperationBand.bandList.getOrNull(bandIndex)?.waveLength
+        ?: OperationBand.bandList.firstOrNull { it.band == freq }?.waveLength
+        ?: BaseRigOperation.getMeterFromFreq(freq)
+        ?: ""
+    val frequencyLabel = buildString {
+        append(formatMhz(freq))
+        append(" MHz")
+        if (bandName.isNotBlank()) {
+            append(" · ")
+            append(bandName)
         }
-    } else {
-        GeneralVariables.getBandString()
     }
-    // Pill label combines MHz frequency and band, e.g. "14.074 MHz · 20m".
-    // formatMhz matches the format used by tiles in FrequencyPickerSheet.
-    val bandLabelTrimmed = bandLabel
-        .substringBefore('(')
-        .trim()
-        .removePrefix("*")
-        .trim()
-    val frequencyLabel = "${formatMhz(GeneralVariables.band)} MHz · $bandLabelTrimmed"
     Box(modifier = Modifier.fillMaxSize().background(BgApp)) {
         Column(
             modifier = Modifier.fillMaxSize(),
