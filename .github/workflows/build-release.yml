@@ -2,11 +2,11 @@ name: Build & Release APK
 
 on:
   push:
-    branches: [release, Dev]
+    branches: [main, Dev]
     tags:
       - 'v*'
   pull_request:
-    branches: [release]
+    branches: [main]
 
 permissions:
   contents: write
