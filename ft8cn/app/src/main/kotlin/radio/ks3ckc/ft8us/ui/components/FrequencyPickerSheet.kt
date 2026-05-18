@@ -45,6 +45,9 @@ fun selectBandIndex(mainViewModel: MainViewModel, context: Context, index: Int) 
         "bandFreq", GeneralVariables.band.toString(), null,
     )
     mainViewModel.databaseOpr.getAllQSLCallsigns()
+    // Notify observers (TxStrip pill, Settings band picker) so the UI updates
+    // without waiting for a rig onFreqChanged round-trip.
+    GeneralVariables.mutableBandChange.postValue(index)
 
     val cm = GeneralVariables.controlMode
     val connected = mainViewModel.isRigConnected()
@@ -103,7 +106,7 @@ private fun buildBandGroups(): List<BandGroup> {
     }
 }
 
-private fun formatMhz(freqHz: Long): String {
+internal fun formatMhz(freqHz: Long): String {
     val mhz = freqHz / 1_000_000.0
     return String.format(java.util.Locale.US, "%.3f", mhz)
 }
@@ -192,10 +195,19 @@ private fun BandTileGrid(
         for (row in rows) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (g in row) {
+                    // If an alternate within this group is the active selection,
+                    // surface that on the tile so the user doesn't have to open the
+                    // alternates list to see what's tuned. Tapping the tile still
+                    // tunes to the band's primary — that's also the "reset to
+                    // default" gesture for getting off an alternate.
+                    val selectedAlt = g.alternates.firstOrNull { it.first == currentBandIndex }
+                    val isSelected = g.primaryIndex == currentBandIndex || selectedAlt != null
+                    val displayFreqHz = selectedAlt?.second ?: g.primaryFreqHz
                     BandTile(
-                        group = g,
-                        isSelected = g.primaryIndex == currentBandIndex ||
-                            g.alternates.any { it.first == currentBandIndex },
+                        waveLength = g.waveLength,
+                        freqHz = displayFreqHz,
+                        isSelected = isSelected,
+                        isAlternate = selectedAlt != null,
                         modifier = Modifier.weight(1f),
                         onClick = { onTileClick(g.primaryIndex) },
                     )
@@ -211,8 +223,10 @@ private fun BandTileGrid(
 
 @Composable
 private fun BandTile(
-    group: BandGroup,
+    waveLength: String,
+    freqHz: Long,
     isSelected: Boolean,
+    isAlternate: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -230,19 +244,31 @@ private fun BandTile(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = group.waveLength,
+                text = waveLength,
                 color = bandColor,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = GeistMonoFamily,
             )
             Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = formatMhz(group.primaryFreqHz),
-                color = freqColor,
-                fontSize = 11.sp,
-                fontFamily = GeistMonoFamily,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isAlternate) {
+                    Text(
+                        text = "ALT ",
+                        color = freqColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = GeistMonoFamily,
+                        letterSpacing = 0.08.sp,
+                    )
+                }
+                Text(
+                    text = formatMhz(freqHz),
+                    color = freqColor,
+                    fontSize = 11.sp,
+                    fontFamily = GeistMonoFamily,
+                )
+            }
         }
     }
 }

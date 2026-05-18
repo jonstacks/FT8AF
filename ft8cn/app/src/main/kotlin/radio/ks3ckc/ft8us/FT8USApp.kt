@@ -24,6 +24,7 @@ import radio.ks3ckc.ft8us.theme.BgApp
 import radio.ks3ckc.ft8us.ui.components.ActiveQsoPanel
 import radio.ks3ckc.ft8us.ui.components.FT8USTab
 import radio.ks3ckc.ft8us.ui.components.FrequencyPickerSheet
+import radio.ks3ckc.ft8us.ui.components.formatMhz
 import radio.ks3ckc.ft8us.ui.components.QsoCelebration
 import radio.ks3ckc.ft8us.ui.components.TabBar
 import radio.ks3ckc.ft8us.ui.components.TransmitGlow
@@ -61,34 +62,22 @@ fun FT8USApp(mainViewModel: MainViewModel) {
         }
     }
 
-    // Derive band/frequency from GeneralVariables
+    // Pill label combines MHz frequency and band name, e.g. "14.074 MHz · 20m".
+    // bandIndex is observed so the pill recomposes when the user retunes.
     val bandIndex by GeneralVariables.mutableBandChange.observeAsState(GeneralVariables.bandListIndex)
-    val bandLabel = if (bandIndex >= 0 && mainViewModel.operationBand != null) {
-        try {
-            OperationBand.getBandInfo(bandIndex)
-        } catch (_: Exception) {
-            GeneralVariables.getBandString()
+    val freq = GeneralVariables.band
+    val bandName = OperationBand.bandList.getOrNull(bandIndex)?.waveLength
+        ?: OperationBand.bandList.firstOrNull { it.band == freq }?.waveLength
+        ?: BaseRigOperation.getMeterFromFreq(freq)
+        ?: ""
+    val frequencyLabel = buildString {
+        append(formatMhz(freq))
+        append(" MHz")
+        if (bandName.isNotBlank()) {
+            append(" · ")
+            append(bandName)
         }
-    } else {
-        GeneralVariables.getBandString()
     }
-    // Short pill label for the TxStrip frequency button — just the band (e.g. "20m").
-    // Looked up by frequency from bands.txt so the conventional band name is used
-    // (e.g. 40.68 MHz is "8m" by convention, not the computed wavelength). Falls
-    // back to the computed wavelength if the freq isn't in the band list.
-    val frequencyLabel = run {
-        val freq = GeneralVariables.band
-        OperationBand.bandList.firstOrNull { it.band == freq }?.waveLength
-            ?: BaseRigOperation.getMeterFromFreq(freq)
-            ?: ""
-    }.ifBlank { "—" }
-    // Trim the band parenthetical and any marker prefix from the status label, since
-    // the band is shown in the new pill on the right.
-    val bandLabelTrimmed = bandLabel
-        .substringBefore('(')
-        .trim()
-        .removePrefix("*")
-        .trim()
     Box(modifier = Modifier.fillMaxSize().background(BgApp)) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -122,7 +111,6 @@ fun FT8USApp(mainViewModel: MainViewModel) {
             TxStrip(
                 isTransmitting = isTransmitting,
                 isActivated = isActivated,
-                bandLabel = bandLabelTrimmed,
                 frequencyLabel = frequencyLabel,
                 txSlot = txSlot,
                 expanded = qsoPanelExpanded,
