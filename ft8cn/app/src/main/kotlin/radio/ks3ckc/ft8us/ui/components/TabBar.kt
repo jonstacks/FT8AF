@@ -87,14 +87,16 @@ fun TabBar(
                 )
             )
     ) {
-        // Animated pill indicator behind the active tab
+        // Animated pill indicator behind the active tab (sized to match the Row, not the
+        // available constraints — using fillMaxSize here would blow up the Box's height
+        // when placed in a Column with unbounded vertical constraints).
         if (activeBounds != null && animatedWidth > 0f) {
             val pillWidthPx = animatedWidth * 0.56f
             val pillHeightPx = with(density) { 28.dp.toPx() }
             val pillTopPx = with(density) { 6.dp.toPx() }
             Canvas(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .graphicsLayer { alpha = 1f }
             ) {
                 val cx = animatedCenter
