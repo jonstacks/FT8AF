@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.database.OperationBand
+import com.bg7yoz.ft8cn.rigs.BaseRigOperation
 import radio.ks3ckc.ft8us.theme.BgApp
 import radio.ks3ckc.ft8us.ui.components.ActiveQsoPanel
 import radio.ks3ckc.ft8us.ui.components.FT8USTab
@@ -72,11 +73,17 @@ fun FT8USApp(mainViewModel: MainViewModel) {
         GeneralVariables.getBandString()
     }
     // Short pill label for the TxStrip frequency button — just the band (e.g. "20m").
-    val frequencyLabel = if (bandIndex >= 0 && bandIndex < OperationBand.bandList.size) {
-        OperationBand.bandList[bandIndex].waveLength
-    } else {
-        "—"
-    }
+    // Derived from the current frequency so it's correct even before bandListIndex
+    // has been set (e.g. on first launch, when index is -1).
+    val frequencyLabel = (BaseRigOperation.getMeterFromFreq(GeneralVariables.band) ?: "")
+        .ifBlank { "—" }
+    // Trim the band parenthetical and any marker prefix from the status label, since
+    // the band is shown in the new pill on the right.
+    val bandLabelTrimmed = bandLabel
+        .substringBefore('(')
+        .trim()
+        .removePrefix("*")
+        .trim()
     Box(modifier = Modifier.fillMaxSize().background(BgApp)) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -110,7 +117,7 @@ fun FT8USApp(mainViewModel: MainViewModel) {
             TxStrip(
                 isTransmitting = isTransmitting,
                 isActivated = isActivated,
-                bandLabel = bandLabel,
+                bandLabel = bandLabelTrimmed,
                 frequencyLabel = frequencyLabel,
                 txSlot = txSlot,
                 expanded = qsoPanelExpanded,
