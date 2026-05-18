@@ -34,7 +34,6 @@ import radio.ks3ckc.ft8us.theme.*
 fun TxStrip(
     isTransmitting: Boolean,
     isActivated: Boolean,
-    bandLabel: String,
     frequencyLabel: String,
     txSlot: Int,
     expanded: Boolean = false,
@@ -73,7 +72,7 @@ fun TxStrip(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Left: chevron + status + band/mode
+        // Left: chevron + status
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -101,14 +100,6 @@ fun TxStrip(
                 color = TextPrimary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
-                fontFamily = GeistMonoFamily,
-                letterSpacing = 0.02.sp,
-            )
-            Text("·", color = TextFaint, fontSize = 11.sp)
-            Text(
-                text = "$bandLabel FT8",
-                color = TextMuted,
-                fontSize = 11.sp,
                 fontFamily = GeistMonoFamily,
                 letterSpacing = 0.02.sp,
             )

@@ -72,16 +72,14 @@ fun FT8USApp(mainViewModel: MainViewModel) {
     } else {
         GeneralVariables.getBandString()
     }
-    // Carrier frequency in MHz for the TxStrip pill (e.g. "14.074"). Matches the
-    // format used by tiles in FrequencyPickerSheet.
-    val frequencyLabel = "${formatMhz(GeneralVariables.band)} MHz"
-    // Trim the band parenthetical and any marker prefix from the status label, since
-    // the band is shown in the new pill on the right.
+    // Pill label combines MHz frequency and band, e.g. "14.074 MHz · 20m".
+    // formatMhz matches the format used by tiles in FrequencyPickerSheet.
     val bandLabelTrimmed = bandLabel
         .substringBefore('(')
         .trim()
         .removePrefix("*")
         .trim()
+    val frequencyLabel = "${formatMhz(GeneralVariables.band)} MHz · $bandLabelTrimmed"
     Box(modifier = Modifier.fillMaxSize().background(BgApp)) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -115,7 +113,6 @@ fun FT8USApp(mainViewModel: MainViewModel) {
             TxStrip(
                 isTransmitting = isTransmitting,
                 isActivated = isActivated,
-                bandLabel = bandLabelTrimmed,
                 frequencyLabel = frequencyLabel,
                 txSlot = txSlot,
                 expanded = qsoPanelExpanded,
