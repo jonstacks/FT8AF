@@ -68,7 +68,6 @@ fun QsoSheet(
             QsoSheetContent(
                 message = message,
                 mainViewModel = mainViewModel,
-                onDismiss = onDismiss,
             )
         }
     }
@@ -78,7 +77,6 @@ fun QsoSheet(
 private fun QsoSheetContent(
     message: Ft8Message,
     mainViewModel: MainViewModel,
-    onDismiss: () -> Unit,
 ) {
     val callsign = message.callsignFrom ?: ""
     val status = resolveQsoStatus(message)
@@ -145,8 +143,8 @@ private fun QsoSheetContent(
             Button(
                 onClick = {
                     mainViewModel.addFollowCallsign(callsign)
+                    GeneralVariables.transmitMessages.add(message)
                     mainViewModel.ft8TransmitSignal.setActivated(true)
-                    onDismiss()
                 },
                 modifier = Modifier
                     .fillMaxWidth()

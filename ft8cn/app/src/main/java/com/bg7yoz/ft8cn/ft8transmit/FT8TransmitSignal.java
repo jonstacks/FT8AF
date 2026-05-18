@@ -87,6 +87,11 @@ public class FT8TransmitSignal {
     public ArrayList<FunctionOfTransmit> functionList = new ArrayList<>();
     public MutableLiveData<ArrayList<FunctionOfTransmit>> mutableFunctions = new MutableLiveData<>();
 
+    // Caller queue: stations that called us while we're in an active QSO
+    private static final int MAX_QUEUE_SIZE = 10;
+    private final ArrayList<QueuedCaller> callerQueue = new ArrayList<>();
+    public MutableLiveData<ArrayList<QueuedCaller>> mutableCallerQueue = new MutableLiveData<>();
+
     private final OnDoTransmitted onDoTransmitted;// typically used for opening/closing PTT
     private final ExecutorService doTransmitThreadPool = Executors.newCachedThreadPool();
     private final DoTransmitRunnable doTransmitRunnable = new DoTransmitRunnable(this);
@@ -793,6 +798,14 @@ public class FT8TransmitSignal {
             //if ((msg.getCallsignTo().equals(GeneralVariables.myCallsign)
             if ((GeneralVariables.checkIsMyCallsign(msg.getCallsignTo())
                     && !GeneralVariables.checkFun5(msg.extraInfo))) {// CQ me, not 73
+
+                // Guard: if we're in an active QSO (not CQ), queue the caller instead of switching
+                if (functionOrder != 6 && toCallsign != null && toCallsign.haveTargetCallsign()
+                        && !msg.getCallsignFrom().equals(toCallsign.callsign)) {
+                    enqueueCaller(msg);
+                    continue;
+                }
+
                 // before setting transmit, determine message sequence to avoid starting from the beginning
                 setTransmit(new TransmitCallsign(msg.i3, msg.n3, msg.getCallsignFrom(), msg.freq_hz
                                 , msg.getSequence(), msg.snr)
@@ -937,8 +950,10 @@ public class FT8TransmitSignal {
             // enter CQ state
             resetToCQ();
 
-            // check if any messages are calling me, or if watched callsigns are CQing
-            checkCQMeOrFollowCQMessage(messages);
+            // try queued callers first, then check for new callers
+            if (!dequeueNextCaller()) {
+                checkCQMeOrFollowCQMessage(messages);
+            }
             setCurrentFunctionOrder(functionOrder);// set current message
             mutableFunctionOrder.postValue(functionOrder);
             return;
@@ -970,7 +985,9 @@ public class FT8TransmitSignal {
         // at this point, no reply messages were received
         // if I am in CQ state, newOrder must be -1
         if (functionOrder == 6) {// I am in CQ state
-            checkCQMeOrFollowCQMessage(messages);
+            if (!dequeueNextCaller()) {
+                checkCQMeOrFollowCQMessage(messages);
+            }
             return;
         }
 
@@ -981,10 +998,12 @@ public class FT8TransmitSignal {
         }
         // if no-reply limit exceeded, reset to CQ state
         if ((GeneralVariables.noReplyCount > GeneralVariables.noReplyLimit) && (GeneralVariables.noReplyLimit > 0)) {
-            // check watched message list; if no new CQ, enter CQ state; if found, switch to calling the new target
-            if (!getNewTargetCallsign(messages)) {//check CQ messages in watch list; returns true if a new target is found
-                functionOrder = 6;
-                toCallsign.callsign = "CQ";
+            // try queued callers first, then check watched messages, then fall back to CQ
+            if (!dequeueNextCaller()) {
+                if (!getNewTargetCallsign(messages)) {//check CQ messages in watch list; returns true if a new target is found
+                    functionOrder = 6;
+                    toCallsign.callsign = "CQ";
+                }
             }
             generateFun();
             setCurrentFunctionOrder(functionOrder);// set current message
@@ -1047,6 +1066,7 @@ public class FT8TransmitSignal {
         this.activated = activated;
         if (!this.activated) {//force stop transmitting
             setTransmitting(false);
+            clearCallerQueue();
         }
         mutableIsActivated.postValue(activated);
     }
@@ -1084,6 +1104,7 @@ public class FT8TransmitSignal {
         if (GeneralVariables.myCallsign.length() < 3) {
             return;
         }
+        clearCallerQueue();
         //must determine my callsign type to set i3n3 !!!
         int i3 = GenerateFT8.checkI3ByCallsign(GeneralVariables.myCallsign);
         setTransmit(new TransmitCallsign(i3, 0, "CQ", UtcTimer.getNowSequential())
@@ -1117,6 +1138,78 @@ public class FT8TransmitSignal {
             generateFun();
         }
     }
+
+    // ==================== Caller Queue Methods ====================
+
+    /**
+     * Add a caller to the queue. Deduplicates by callsign (updates SNR/freq if already present).
+     * Skips callers that are excluded, already QSL'd, or our own callsign.
+     */
+    public void enqueueCaller(Ft8Message msg) {
+        String callsign = msg.getCallsignFrom();
+        if (callsign == null || callsign.isEmpty()) return;
+        if (GeneralVariables.checkIsMyCallsign(callsign)) return;
+        if (GeneralVariables.checkIsExcludeCallsign(callsign)) return;
+        if (GeneralVariables.checkQSLCallsign(callsign)) return;
+
+        synchronized (callerQueue) {
+            // Update existing entry if callsign already queued
+            for (int i = 0; i < callerQueue.size(); i++) {
+                if (callerQueue.get(i).callsign.equals(callsign)) {
+                    QueuedCaller existing = callerQueue.get(i);
+                    existing.snr = msg.snr;
+                    existing.queuedTimeMs = System.currentTimeMillis();
+                    mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+                    return;
+                }
+            }
+            // Add new entry if not at capacity
+            if (callerQueue.size() < MAX_QUEUE_SIZE) {
+                callerQueue.add(new QueuedCaller(
+                        callsign, msg.freq_hz, msg.getSequence(), msg.snr,
+                        msg.i3, msg.n3, msg.extraInfo));
+                mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+            }
+        }
+    }
+
+    /**
+     * Dequeue the next caller and start a QSO with them via setTransmit().
+     * Skips stale or excluded callers. Returns true if a caller was started.
+     */
+    public boolean dequeueNextCaller() {
+        synchronized (callerQueue) {
+            while (!callerQueue.isEmpty()) {
+                QueuedCaller caller = callerQueue.remove(0);
+                mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+
+                // Skip if caller is now excluded or already worked
+                if (GeneralVariables.checkIsExcludeCallsign(caller.callsign)) continue;
+                if (GeneralVariables.checkQSLCallsign(caller.callsign)) continue;
+
+                // Start QSO with this caller
+                resetTargetReport();
+                setTransmit(new TransmitCallsign(caller.i3, caller.n3, caller.callsign,
+                                caller.frequency, caller.sequential, caller.snr),
+                        GeneralVariables.checkFunOrderByExtraInfo(caller.extraInfo) + 1,
+                        caller.extraInfo);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Clear the entire caller queue.
+     */
+    public void clearCallerQueue() {
+        synchronized (callerQueue) {
+            callerQueue.clear();
+            mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+        }
+    }
+
+    // ==================== End Caller Queue Methods ====================
 
     /**
      * Set transmit time delay; this delay also provides decoding time for the previous cycle.
