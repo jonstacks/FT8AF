@@ -197,18 +197,19 @@ private fun BandTileGrid(
                 for (g in row) {
                     // If an alternate within this group is the active selection,
                     // surface that on the tile so the user doesn't have to open the
-                    // alternates list to see what's tuned.
+                    // alternates list to see what's tuned. Tapping the tile still
+                    // tunes to the band's primary — that's also the "reset to
+                    // default" gesture for getting off an alternate.
                     val selectedAlt = g.alternates.firstOrNull { it.first == currentBandIndex }
                     val isSelected = g.primaryIndex == currentBandIndex || selectedAlt != null
                     val displayFreqHz = selectedAlt?.second ?: g.primaryFreqHz
-                    val tapIndex = selectedAlt?.first ?: g.primaryIndex
                     BandTile(
                         waveLength = g.waveLength,
                         freqHz = displayFreqHz,
                         isSelected = isSelected,
                         isAlternate = selectedAlt != null,
                         modifier = Modifier.weight(1f),
-                        onClick = { onTileClick(tapIndex) },
+                        onClick = { onTileClick(g.primaryIndex) },
                     )
                 }
                 // Pad incomplete row with empty weights so tiles stay sized consistently.
