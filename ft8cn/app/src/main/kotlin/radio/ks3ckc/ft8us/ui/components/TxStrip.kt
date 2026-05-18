@@ -35,7 +35,6 @@ fun TxStrip(
     isTransmitting: Boolean,
     isActivated: Boolean,
     bandLabel: String,
-    frequencyMhz: String,
     txSlot: Int,
     expanded: Boolean = false,
     onCallCQ: () -> Unit,
@@ -159,20 +158,6 @@ fun TxStrip(
                     letterSpacing = 0.02.sp,
                 )
             }
-
-            Text(
-                text = frequencyMhz,
-                color = Accent,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = GeistMonoFamily,
-            )
-            Text(
-                text = "MHz",
-                color = TextFaint,
-                fontSize = 11.sp,
-                fontFamily = GeistMonoFamily,
-            )
         }
     }
 }

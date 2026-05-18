@@ -50,10 +50,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
+import android.Manifest
+import android.app.Activity
+import android.content.pm.PackageManager
 import android.media.AudioManager
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.connector.CableSerialPort
+import com.bg7yoz.ft8cn.location.GridLocationUpdater
 import com.bg7yoz.ft8cn.connector.ConnectMode
 import com.bg7yoz.ft8cn.database.ControlMode
 import com.bg7yoz.ft8cn.database.OperationBand
@@ -98,6 +104,7 @@ fun SettingsScreen(
     var synFrequency by remember { mutableStateOf(GeneralVariables.synFrequency) }
     var autoFollowCQ by remember { mutableStateOf(GeneralVariables.autoFollowCQ) }
     var autoCallFollow by remember { mutableStateOf(GeneralVariables.autoCallFollow) }
+    var autoUpdateGridFromGPS by remember { mutableStateOf(GeneralVariables.autoUpdateGridFromGPS) }
     var enableCloudlog by remember { mutableStateOf(GeneralVariables.enableCloudlog) }
     var enableQRZ by remember { mutableStateOf(GeneralVariables.enableQRZ) }
     var saveSWLMessage by remember { mutableStateOf(GeneralVariables.saveSWLMessage) }
@@ -117,6 +124,7 @@ fun SettingsScreen(
     var showStopAfter by remember { mutableStateOf(false) }
     var showPttDelay by remember { mutableStateOf(false) }
     var showTxDelay by remember { mutableStateOf(false) }
+    var showLateStart by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showCloudlog by remember { mutableStateOf(false) }
     var showRigModelPicker by remember { mutableStateOf(false) }
@@ -135,6 +143,7 @@ fun SettingsScreen(
     var noReplyLimit by remember { mutableIntStateOf(GeneralVariables.noReplyLimit) }
     var pttDelay by remember { mutableIntStateOf(GeneralVariables.pttDelay) }
     var txDelay by remember { mutableIntStateOf(GeneralVariables.transmitDelay) }
+    var lateStartMs by remember { mutableIntStateOf(GeneralVariables.lateStartTolerance) }
     var connectMode by remember { mutableIntStateOf(GeneralVariables.connectMode) }
     var cloudlogAddress by remember { mutableStateOf(GeneralVariables.cloudlogServerAddress.orEmpty()) }
     var controlMode by remember { mutableIntStateOf(GeneralVariables.controlMode) }
@@ -482,6 +491,25 @@ fun SettingsScreen(
         )
     }
 
+    // -- Late-start Tolerance Editor --
+    if (showLateStart) {
+        NumberInputDialog(
+            title = "Late-start Tolerance",
+            suffix = "ms",
+            initialValue = lateStartMs,
+            min = 0,
+            max = 4000,
+            onDismiss = { showLateStart = false },
+            onSave = { value ->
+                showLateStart = false
+                val clamped = value.coerceIn(0, 4000)
+                GeneralVariables.lateStartTolerance = clamped
+                lateStartMs = clamped
+                mainViewModel.databaseOpr.writeConfig("lateStartTolerance", clamped.toString(), null)
+            },
+        )
+    }
+
     // -- About / FAQ Dialog --
     if (showAbout) {
         InfoDialog(
@@ -704,6 +732,36 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 4.dp),
                     onClick = { showEditOperator = true },
                 )
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    SettingsRow(
+                        label = "Auto-update Grid (GPS)",
+                        description = "Use device GPS to keep your Maidenhead grid current",
+                        toggle = autoUpdateGridFromGPS,
+                        onToggleChange = { checked ->
+                            if (checked) {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.ACCESS_FINE_LOCATION,
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (!granted) {
+                                    val activity = context as? Activity
+                                    if (activity != null) {
+                                        ActivityCompat.requestPermissions(
+                                            activity,
+                                            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                                            42,
+                                        )
+                                    }
+                                }
+                            }
+                            autoUpdateGridFromGPS = checked
+                            GeneralVariables.autoUpdateGridFromGPS = checked
+                            mainViewModel.databaseOpr.writeConfig(
+                                "autoGridFromGPS", if (checked) "1" else "0", null,
+                            )
+                            GridLocationUpdater.refresh(context, mainViewModel)
+                        },
+                    )
+                }
             }
 
             // =====================================================================
@@ -921,8 +979,8 @@ fun SettingsScreen(
                         )
                         SectionDivider()
                         SettingsRow(
-                            label = "Cloudlog",
-                            description = "Auto-upload QSOs to a Cloudlog instance",
+                            label = "Cloudlog / Wavelog / Nextlog",
+                            description = "Auto-upload QSOs to a Cloudlog, Wavelog, or Nextlog instance",
                             value = cloudlogAddress.ifEmpty { "Not configured" },
                             toggle = enableCloudlog,
                             onToggleChange = { checked ->
@@ -959,6 +1017,14 @@ fun SettingsScreen(
                             value = txDelayStr,
                             showChevron = true,
                             onClick = { showTxDelay = true },
+                        )
+                        SectionDivider()
+                        SettingsRow(
+                            label = "Late-start Tolerance",
+                            description = "Allow starting TX up to N ms into a cycle; leading audio is clipped so TX ends on the cycle boundary",
+                            value = "$lateStartMs ms",
+                            showChevron = true,
+                            onClick = { showLateStart = true },
                         )
                     }
                 }
@@ -1159,10 +1225,17 @@ private fun CloudlogSettingsDialog(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
-                text = "Cloudlog Settings",
+                text = "Logging Server",
                 color = TextPrimary,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 18.sp,
+            )
+
+            Text(
+                text = "Cloudlog, Wavelog, and Nextlog all accept the same uploads.",
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
             )
 
             OutlinedTextField(

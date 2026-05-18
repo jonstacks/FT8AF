@@ -24,6 +24,7 @@ package com.bg7yoz.ft8cn;
 
 import static com.bg7yoz.ft8cn.GeneralVariables.getStringFromResource;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.PendingIntent;
 import android.bluetooth.BluetoothAdapter;
@@ -32,6 +33,8 @@ import android.bluetooth.BluetoothProfile;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import androidx.core.content.ContextCompat;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
@@ -339,12 +342,13 @@ public class MainViewModel extends ViewModel {
 
                 //check transmit procedure. Parse transmit procedure from message list
                 //if exceeded cycle by 2 seconds, should not parse
+                int autoReplyBudgetMs = Math.max(2000, GeneralVariables.lateStartTolerance);
                 if (!ft8TransmitSignal.isTransmitting()
                         && !isDeep//block deep decode from activating auto procedure
                         //deep decode list should be added to the new message list without deep decode
                         && (ft8SignalListener.timeSec
                         + GeneralVariables.pttDelay
-                        + GeneralVariables.transmitDelay <= 2000)) {//considering network mode, transmit duration is 13 seconds
+                        + GeneralVariables.transmitDelay <= autoReplyBudgetMs)) {//budget scales with late-start tolerance
                     ft8TransmitSignal.parseMessageToFunction(messages);//parse messages and process
                 }
 
@@ -1092,13 +1096,28 @@ public class MainViewModel extends ViewModel {
      */
     @SuppressLint("MissingPermission")
     public boolean isBTConnected() {
+        // On Android 12+, getProfileConnectionState requires BLUETOOTH_CONNECT.
+        // ComposeMainActivity.onCreate asks for it asynchronously, so on the first launch this
+        // method may run before the user has answered the prompt — return false rather than crash.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Context ctx = GeneralVariables.getMainContext();
+            if (ctx == null
+                    || ContextCompat.checkSelfPermission(ctx, Manifest.permission.BLUETOOTH_CONNECT)
+                            != PackageManager.PERMISSION_GRANTED) {
+                return false;
+            }
+        }
         BluetoothAdapter blueAdapter = BluetoothAdapter.getDefaultAdapter();
         if (blueAdapter == null) return false;
 
-        //Bluetooth headset, supports voice input and output
-        int headset = blueAdapter.getProfileConnectionState(BluetoothProfile.HEADSET);
-        int a2dp = blueAdapter.getProfileConnectionState(BluetoothProfile.A2DP);
-        return headset == BluetoothAdapter.STATE_CONNECTED || a2dp == BluetoothAdapter.STATE_CONNECTED;
+        try {
+            //Bluetooth headset, supports voice input and output
+            int headset = blueAdapter.getProfileConnectionState(BluetoothProfile.HEADSET);
+            int a2dp = blueAdapter.getProfileConnectionState(BluetoothProfile.A2DP);
+            return headset == BluetoothAdapter.STATE_CONNECTED || a2dp == BluetoothAdapter.STATE_CONNECTED;
+        } catch (SecurityException se) {
+            return false;
+        }
     }
 
     private static class GetQTHRunnable implements Runnable {

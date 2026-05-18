@@ -32,9 +32,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -50,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.count.CountDbOpr
 import com.bg7yoz.ft8cn.log.QSLCallsignRecord
+import com.bg7yoz.ft8cn.ui.ExportLogSheet
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -115,6 +121,7 @@ private data class AwardProgress(
 
 @Composable
 fun LogbookScreen(mainViewModel: MainViewModel) {
+    val context = LocalContext.current
     var activeTab by remember { mutableStateOf(LogbookTab.STATS) }
 
     // Async-loaded stats
@@ -204,6 +211,17 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
             subtitle = {
                 val count = if (stats.totalQsos > 0) stats.totalQsos else records.size
                 TopBarSubtitle(text = "$count QSOs \u00b7 All bands")
+            },
+            actions = {
+                IconButton(onClick = {
+                    ExportLogSheet(context, mainViewModel).show()
+                }) {
+                    Icon(
+                        imageVector = Icons.Filled.Share,
+                        contentDescription = "Export QSOs",
+                        tint = TextMuted,
+                    )
+                }
             },
         )
 

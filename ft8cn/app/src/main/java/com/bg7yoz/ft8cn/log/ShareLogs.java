@@ -1,11 +1,15 @@
 package com.bg7yoz.ft8cn.log;
 
 import android.annotation.SuppressLint;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.util.Log;
 
 import androidx.core.content.FileProvider;
@@ -15,15 +19,23 @@ import com.bg7yoz.ft8cn.R;
 import com.bg7yoz.ft8cn.ui.ToastMessage;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.util.ArrayList;
 
 public class ShareLogs {
     private static final String TAG = "ShareLogs";
     private boolean isCancel=false;
 
-    private String makeSQL(int queryFilter) {
+    /** Request cancellation of an in-flight export. */
+    public void cancelShare() {
+        isCancel = true;
+    }
+
+    private String makeSQL(int queryFilter, String dateStart, String dateEnd) {
         String filterStr;
         switch (queryFilter) {
             case 1:
@@ -35,29 +47,45 @@ public class ShareLogs {
             default:
                 filterStr = "";
         }
+        String dateClause = "";
+        if (dateStart != null && !dateStart.isEmpty()) {
+            dateClause += " and q.qso_date >= ?\n";
+        }
+        if (dateEnd != null && !dateEnd.isEmpty()) {
+            dateClause += " and q.qso_date <= ?\n";
+        }
         return " FROM QSLTable AS q \n" +
                 "WHERE ((CALL LIKE ?)OR(station_callsign LIKE ?))\n" +
-                filterStr;
-
+                filterStr + dateClause;
     }
 
+    private String[] buildArgs(String queryKey, String dateStart, String dateEnd) {
+        String key = "%" + queryKey + "%";
+        ArrayList<String> args = new ArrayList<>();
+        args.add(key);
+        args.add(key);
+        if (dateStart != null && !dateStart.isEmpty()) args.add(dateStart);
+        if (dateEnd != null && !dateEnd.isEmpty()) args.add(dateEnd);
+        return args.toArray(new String[0]);
+    }
 
     @SuppressLint("Range")
-    private int getCount(SQLiteDatabase db, String queryKey, int queryFilter) {
-        String sql = makeSQL(queryFilter);
-        String key = "%" + queryKey + "%";
-        Cursor cursor = db.rawQuery("SELECT COUNT(*) AS C " + sql, new String[]{key, key});
+    public int getCount(SQLiteDatabase db, String queryKey, int queryFilter,
+                        String dateStart, String dateEnd) {
+        String sql = makeSQL(queryFilter, dateStart, dateEnd);
+        Cursor cursor = db.rawQuery("SELECT COUNT(*) AS C " + sql,
+                buildArgs(queryKey, dateStart, dateEnd));
         cursor.moveToFirst();
         int count = cursor.getInt(cursor.getColumnIndex("C"));
-
         cursor.close();
         return count;
     }
 
-    private Cursor getData(SQLiteDatabase db, String queryKey, int queryFilter) {
-        String sql = makeSQL(queryFilter);
-        String key = "%" + queryKey + "%";
-        return db.rawQuery("SELECT * " + sql, new String[]{key, key});
+    private Cursor getData(SQLiteDatabase db, String queryKey, int queryFilter,
+                           String dateStart, String dateEnd) {
+        String sql = makeSQL(queryFilter, dateStart, dateEnd);
+        return db.rawQuery("SELECT * " + sql,
+                buildArgs(queryKey, dateStart, dateEnd));
     }
 
     /**
@@ -71,17 +99,24 @@ public class ShareLogs {
      * @param onGetShareLogs callback
      */
     @SuppressLint({"DefaultLocale", "Range"})
-    private void downQSLTableToFile(SQLiteDatabase db, String queryKey, int queryFilter, File adiFile
+    public void downQSLTableToFile(SQLiteDatabase db, String queryKey, int queryFilter, File adiFile
             , boolean isSWL
             , OnShareLogEvents onGetShareLogs) {
-        final int count = getCount(db, queryKey, queryFilter);
+        downQSLTableToFile(db, queryKey, queryFilter, null, null, adiFile, isSWL, onGetShareLogs);
+    }
+
+    @SuppressLint({"DefaultLocale", "Range"})
+    public void downQSLTableToFile(SQLiteDatabase db, String queryKey, int queryFilter,
+                                    String dateStart, String dateEnd, File adiFile,
+                                    boolean isSWL, OnShareLogEvents onGetShareLogs) {
+        final int count = getCount(db, queryKey, queryFilter, dateStart, dateEnd);
 
         if (onGetShareLogs != null) {
             onGetShareLogs.onShareStart(count, String.format(
                     GeneralVariables.getStringFromResource(R.string.total_logs)
                     , count));
         }
-        Cursor cursor = getData(db, queryKey, queryFilter);
+        Cursor cursor = getData(db, queryKey, queryFilter, dateStart, dateEnd);
         FileOutputStream fileOutputStream = null;
         int position = 0;
         try {
@@ -243,10 +278,19 @@ public class ShareLogs {
             , SQLiteDatabase db, String queryKey, int queryFilter, File adiFile
             , boolean isSWL
             , OnShareLogEvents onGetShareLogs) {
+        doShareLogs(context, file, title, db, queryKey, queryFilter, null, null,
+                adiFile, isSWL, onGetShareLogs);
+    }
+
+    public void doShareLogs(Context context, File file, String title
+            , SQLiteDatabase db, String queryKey, int queryFilter
+            , String dateStart, String dateEnd, File adiFile
+            , boolean isSWL
+            , OnShareLogEvents onGetShareLogs) {
 
         isCancel=false;
 
-        downQSLTableToFile(db, queryKey, queryFilter, adiFile, false, new OnShareLogEvents() {
+        downQSLTableToFile(db, queryKey, queryFilter, dateStart, dateEnd, adiFile, false, new OnShareLogEvents() {
             @Override
             public void onPreparing(String info) {
                 if (onGetShareLogs!=null){
@@ -280,7 +324,7 @@ public class ShareLogs {
                     Intent sharingIntent = new Intent(Intent.ACTION_SEND);
                     Uri fileUri = FileProvider.getUriForFile(context.getApplicationContext()
                             , "com.bg7yoz.ft8cn.fileprovider", file);
-                    sharingIntent.setType("text/plain");
+                    sharingIntent.setType("application/octet-stream");
                     sharingIntent.putExtra(Intent.EXTRA_STREAM, fileUri);
                     sharingIntent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     context.startActivity(Intent.createChooser(sharingIntent, title));
@@ -298,6 +342,58 @@ public class ShareLogs {
 
     }
 
+    /**
+     * Copy {@code source} into the user's Downloads/FT8US directory.
+     * Returns the user-visible relative path on success, or null on failure.
+     */
+    public static String saveToDownloads(Context context, File source, String displayName) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.Downloads.DISPLAY_NAME, displayName);
+                values.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
+                values.put(MediaStore.Downloads.RELATIVE_PATH,
+                        Environment.DIRECTORY_DOWNLOADS + "/FT8US");
+                Uri uri = context.getContentResolver().insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) return null;
+                OutputStream os = context.getContentResolver().openOutputStream(uri);
+                FileInputStream is = new FileInputStream(source);
+                copyStream(is, os);
+                is.close();
+                if (os != null) os.close();
+                return "Download/FT8US/" + displayName;
+            } else {
+                File downloads = new File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "FT8US");
+                if (!downloads.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    downloads.mkdirs();
+                }
+                File out = new File(downloads, displayName);
+                FileInputStream is = new FileInputStream(source);
+                FileOutputStream os = new FileOutputStream(out);
+                copyStream(is, os);
+                is.close();
+                os.close();
+                return "Download/FT8US/" + displayName;
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "saveToDownloads failed: " + e.getMessage());
+            return null;
+        } catch (SecurityException se) {
+            Log.e(TAG, "saveToDownloads denied: " + se.getMessage());
+            return null;
+        }
+    }
 
-
+    private static void copyStream(java.io.InputStream in, OutputStream out) throws IOException {
+        if (in == null || out == null) return;
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            out.write(buf, 0, n);
+        }
+        out.flush();
+    }
 }
