@@ -158,10 +158,12 @@ public class ThirdPartyService {
                 return false;
             }
             Log.d(TAG, result);
-            if (!result.equals("<auth><status>Valid</status><rights>rw</rights></auth>")){
-                return false;
-            }
-            return true;
+            // Nextlog and Wavelog both implement /api/auth but return slightly different shapes
+            // (XML declaration, extra whitespace, etc.). Match on the meaningful markers so all
+            // three Cloudlog-compatible backends report Pass.
+            String compact = result.replaceAll("\\s+", "");
+            return compact.contains("<status>Valid</status>")
+                    && compact.contains("<rights>rw</rights>");
         }catch (Exception e){
             Log.d(TAG, e.toString());
             return false;

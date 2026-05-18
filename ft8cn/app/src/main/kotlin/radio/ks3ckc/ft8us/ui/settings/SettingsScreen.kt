@@ -1329,13 +1329,6 @@ private fun CloudlogSettingsDialog(
                 }
             }
 
-            Text(
-                text = "Test Connection uses the Cloudlog auth endpoint; it may report Fail for Nextlog even when uploads work.",
-                color = TextFaint,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
-            )
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
