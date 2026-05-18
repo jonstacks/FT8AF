@@ -19,13 +19,16 @@ import androidx.compose.ui.platform.LocalContext
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.database.OperationBand
+import com.bg7yoz.ft8cn.rigs.BaseRigOperation
 import radio.ks3ckc.ft8us.theme.BgApp
 import radio.ks3ckc.ft8us.ui.components.ActiveQsoPanel
 import radio.ks3ckc.ft8us.ui.components.FT8USTab
+import radio.ks3ckc.ft8us.ui.components.FrequencyPickerSheet
 import radio.ks3ckc.ft8us.ui.components.QsoCelebration
 import radio.ks3ckc.ft8us.ui.components.TabBar
 import radio.ks3ckc.ft8us.ui.components.TransmitGlow
 import radio.ks3ckc.ft8us.ui.components.TxStrip
+import radio.ks3ckc.ft8us.ui.components.selectBandIndex
 import radio.ks3ckc.ft8us.ui.decode.DecodeScreen
 import radio.ks3ckc.ft8us.ui.logbook.LogbookScreen
 import radio.ks3ckc.ft8us.ui.map.MapScreen
@@ -45,6 +48,9 @@ fun FT8USApp(mainViewModel: MainViewModel) {
 
     // QSO panel expand/collapse state
     var qsoPanelExpanded by rememberSaveable { mutableStateOf(false) }
+
+    // Frequency picker sheet state
+    var showFrequencyPicker by rememberSaveable { mutableStateOf(false) }
 
     // Auto-expand when activated, auto-collapse when deactivated
     LaunchedEffect(isActivated) {
@@ -66,6 +72,23 @@ fun FT8USApp(mainViewModel: MainViewModel) {
     } else {
         GeneralVariables.getBandString()
     }
+    // Short pill label for the TxStrip frequency button — just the band (e.g. "20m").
+    // Looked up by frequency from bands.txt so the conventional band name is used
+    // (e.g. 40.68 MHz is "8m" by convention, not the computed wavelength). Falls
+    // back to the computed wavelength if the freq isn't in the band list.
+    val frequencyLabel = run {
+        val freq = GeneralVariables.band
+        OperationBand.bandList.firstOrNull { it.band == freq }?.waveLength
+            ?: BaseRigOperation.getMeterFromFreq(freq)
+            ?: ""
+    }.ifBlank { "—" }
+    // Trim the band parenthetical and any marker prefix from the status label, since
+    // the band is shown in the new pill on the right.
+    val bandLabelTrimmed = bandLabel
+        .substringBefore('(')
+        .trim()
+        .removePrefix("*")
+        .trim()
     Box(modifier = Modifier.fillMaxSize().background(BgApp)) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -99,7 +122,8 @@ fun FT8USApp(mainViewModel: MainViewModel) {
             TxStrip(
                 isTransmitting = isTransmitting,
                 isActivated = isActivated,
-                bandLabel = bandLabel,
+                bandLabel = bandLabelTrimmed,
+                frequencyLabel = frequencyLabel,
                 txSlot = txSlot,
                 expanded = qsoPanelExpanded,
                 onCallCQ = {
@@ -119,6 +143,7 @@ fun FT8USApp(mainViewModel: MainViewModel) {
                     mainViewModel.ft8TransmitSignal.sequential = newSlot
                     mainViewModel.ft8TransmitSignal.mutableSequential.postValue(newSlot)
                 },
+                onOpenFrequencyPicker = { showFrequencyPicker = true },
                 onToggleExpand = { qsoPanelExpanded = !qsoPanelExpanded },
             )
 
@@ -135,5 +160,17 @@ fun FT8USApp(mainViewModel: MainViewModel) {
 
         // One-shot particle burst when a QSO completes.
         QsoCelebration(triggerAt = qsoCompletedAt)
+
+        // Frequency picker — sibling overlay so the scrim and sheet sit above the
+        // tab bar and TxStrip.
+        FrequencyPickerSheet(
+            visible = showFrequencyPicker,
+            currentBandIndex = bandIndex,
+            onDismiss = { showFrequencyPicker = false },
+            onSelect = { idx ->
+                selectBandIndex(mainViewModel, context, idx)
+                showFrequencyPicker = false
+            },
+        )
     }
 }

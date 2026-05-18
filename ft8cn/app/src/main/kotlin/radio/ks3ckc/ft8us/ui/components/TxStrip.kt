@@ -35,11 +35,13 @@ fun TxStrip(
     isTransmitting: Boolean,
     isActivated: Boolean,
     bandLabel: String,
+    frequencyLabel: String,
     txSlot: Int,
     expanded: Boolean = false,
     onCallCQ: () -> Unit,
     onStop: () -> Unit,
     onToggleSlot: () -> Unit,
+    onOpenFrequencyPicker: () -> Unit,
     onToggleExpand: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -117,6 +119,27 @@ fun TxStrip(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Frequency / band pill — opens the frequency picker
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BgSurface3)
+                    .clickable { onOpenFrequencyPicker() }
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = frequencyLabel,
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = GeistMonoFamily,
+                    letterSpacing = 0.02.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+
             // CQ / Stop pill button
             val buttonBg = if (isActivated) StatusBad.copy(alpha = 0.18f) else AccentSoft
             val buttonTextColor = if (isActivated) StatusBad else Accent
