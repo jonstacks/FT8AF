@@ -3,10 +3,13 @@ package radio.ks3ckc.ft8us
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -52,6 +55,7 @@ import java.util.Locale
 class ComposeMainActivity : ComponentActivity() {
 
     private var bluetoothReceiver: BluetoothStateBroadcastReceive? = null
+    private var usbDetachReceiver: BroadcastReceiver? = null
     private lateinit var mainViewModel: MainViewModel
 
     companion object {
@@ -100,6 +104,12 @@ class ComposeMainActivity : ComponentActivity() {
         if (mainViewModel.isBTConnected()) {
             mainViewModel.setBlueToothOn()
         }
+
+        // Register USB detach receiver — without this, a cable yank leaves the
+        // recorder waiting on a dead handle and TX still pointing at a closed
+        // UsbDeviceConnection. We tear down those handles here so the next
+        // ATTACH event can rebind cleanly.
+        registerUsbDetachReceiver()
 
         // Set Compose UI — splash plays once per cold start, then crossfades into the app.
         setContent {
@@ -337,8 +347,47 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    private fun registerUsbDetachReceiver() {
+        if (usbDetachReceiver != null) return
+        usbDetachReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                fileLog("usbDetach: vid=${device?.vendorId?.toString(16)} " +
+                    "pid=${device?.productId?.toString(16)}")
+                // Drop the recorder's USB audio handle. reinitialize() handles
+                // both "device gone -> fall back to built-in mic" and
+                // "device returned -> reopen". Idempotent and safe to call.
+                try {
+                    mainViewModel.reinitializeAudioInput()
+                } catch (e: Exception) {
+                    fileLog("usbDetach: reinitializeAudioInput threw: ${e.message}")
+                }
+            }
+        }
+        val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbDetachReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbDetachReceiver, filter)
+        }
+    }
+
+    private fun unregisterUsbDetachReceiver() {
+        usbDetachReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+            usbDetachReceiver = null
+        }
+    }
+
     override fun onDestroy() {
         unregisterBluetoothReceiver()
+        unregisterUsbDetachReceiver()
         super.onDestroy()
     }
 
