@@ -120,23 +120,29 @@ fun TxStrip(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // Frequency / band pill — opens the frequency picker
-            Box(
+            Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .background(BgSurface3)
                     .clickable { onOpenFrequencyPicker() }
                     .padding(horizontal = 10.dp, vertical = 7.dp),
-                contentAlignment = Alignment.Center,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
                     text = frequencyLabel,
-                    color = TextMuted,
+                    color = TextPrimary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = GeistMonoFamily,
                     letterSpacing = 0.02.sp,
                     maxLines = 1,
                     softWrap = false,
+                )
+                FT8USIcons.ChevronDown(
+                    size = 12.dp,
+                    color = TextMuted,
+                    strokeWidth = 2f,
                 )
             }
 
