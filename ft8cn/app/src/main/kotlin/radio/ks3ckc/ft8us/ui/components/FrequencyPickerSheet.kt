@@ -45,6 +45,9 @@ fun selectBandIndex(mainViewModel: MainViewModel, context: Context, index: Int) 
         "bandFreq", GeneralVariables.band.toString(), null,
     )
     mainViewModel.databaseOpr.getAllQSLCallsigns()
+    // Notify observers (TxStrip pill, Settings band picker) so the UI updates
+    // without waiting for a rig onFreqChanged round-trip.
+    GeneralVariables.mutableBandChange.postValue(index)
 
     val cm = GeneralVariables.controlMode
     val connected = mainViewModel.isRigConnected()
