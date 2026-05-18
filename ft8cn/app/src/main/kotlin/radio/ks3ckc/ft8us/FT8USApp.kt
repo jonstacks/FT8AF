@@ -19,11 +19,11 @@ import androidx.compose.ui.platform.LocalContext
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.database.OperationBand
-import com.bg7yoz.ft8cn.rigs.BaseRigOperation
 import radio.ks3ckc.ft8us.theme.BgApp
 import radio.ks3ckc.ft8us.ui.components.ActiveQsoPanel
 import radio.ks3ckc.ft8us.ui.components.FT8USTab
 import radio.ks3ckc.ft8us.ui.components.FrequencyPickerSheet
+import radio.ks3ckc.ft8us.ui.components.formatMhz
 import radio.ks3ckc.ft8us.ui.components.QsoCelebration
 import radio.ks3ckc.ft8us.ui.components.TabBar
 import radio.ks3ckc.ft8us.ui.components.TransmitGlow
@@ -72,16 +72,9 @@ fun FT8USApp(mainViewModel: MainViewModel) {
     } else {
         GeneralVariables.getBandString()
     }
-    // Short pill label for the TxStrip frequency button — just the band (e.g. "20m").
-    // Looked up by frequency from bands.txt so the conventional band name is used
-    // (e.g. 40.68 MHz is "8m" by convention, not the computed wavelength). Falls
-    // back to the computed wavelength if the freq isn't in the band list.
-    val frequencyLabel = run {
-        val freq = GeneralVariables.band
-        OperationBand.bandList.firstOrNull { it.band == freq }?.waveLength
-            ?: BaseRigOperation.getMeterFromFreq(freq)
-            ?: ""
-    }.ifBlank { "—" }
+    // Carrier frequency in MHz for the TxStrip pill (e.g. "14.074"). Matches the
+    // format used by tiles in FrequencyPickerSheet.
+    val frequencyLabel = "${formatMhz(GeneralVariables.band)} MHz"
     // Trim the band parenthetical and any marker prefix from the status label, since
     // the band is shown in the new pill on the right.
     val bandLabelTrimmed = bandLabel

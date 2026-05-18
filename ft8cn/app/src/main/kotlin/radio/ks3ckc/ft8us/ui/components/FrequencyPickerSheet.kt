@@ -103,7 +103,7 @@ private fun buildBandGroups(): List<BandGroup> {
     }
 }
 
-private fun formatMhz(freqHz: Long): String {
+internal fun formatMhz(freqHz: Long): String {
     val mhz = freqHz / 1_000_000.0
     return String.format(java.util.Locale.US, "%.3f", mhz)
 }
