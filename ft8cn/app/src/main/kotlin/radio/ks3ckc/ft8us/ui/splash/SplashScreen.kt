@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,13 +32,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import com.bg7yoz.ft8cn.R
 import radio.ks3ckc.ft8us.theme.Accent
-import radio.ks3ckc.ft8us.theme.AccentGlow
 import radio.ks3ckc.ft8us.theme.GeistMonoFamily
 import radio.ks3ckc.ft8us.theme.Signal
 import radio.ks3ckc.ft8us.theme.TextPrimary
@@ -100,16 +100,21 @@ fun FT8USplashScreen(
         ) {
             Spacer(modifier = Modifier.weight(1f))
 
-            // Icon + animated pulse aura.
+            // Icon + animated pulse aura. Uses the launcher icon clipped to a circle
+            // so the splash matches the system pre-splash exactly. AndroidView + ImageView
+            // because the launcher is an adaptive icon (XML), which painterResource can't load.
             Box(contentAlignment = Alignment.Center) {
                 PulseAura(phase = auraPhase, modifier = Modifier.size(220.dp))
-                Box(
+                AndroidView(
+                    factory = { ctx ->
+                        android.widget.ImageView(ctx).apply {
+                            setImageResource(R.mipmap.ic_launcher)
+                        }
+                    },
                     modifier = Modifier
                         .size(148.dp)
-                        .clip(RoundedCornerShape(33.dp)),
-                ) {
-                    SplashIcon(modifier = Modifier.fillMaxSize())
-                }
+                        .clip(CircleShape),
+                )
             }
 
             Spacer(modifier = Modifier.height(36.dp))
@@ -227,151 +232,6 @@ private fun PulseAura(phase: Float, modifier: Modifier = Modifier) {
         }
     }
 }
-
-/**
- * Compose-rendered version of the launcher icon for the splash screen.
- * Slightly higher fidelity than the launcher vector drawable: includes the
- * vertical scan band, denser gradients, and a more diffuse center glow.
- */
-@Composable
-private fun SplashIcon(modifier: Modifier = Modifier) {
-    Canvas(
-        modifier = modifier.background(
-            Brush.radialGradient(
-                0f to Color(0xFF1A2238),
-                0.55f to Color(0xFF0A1020),
-                1f to Color(0xFF04070E),
-            )
-        )
-    ) {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h * 0.527f // matches icon.jsx center at (512, 540) of 1024
-
-        // Subtle horizontal scan band.
-        drawRect(
-            brush = Brush.verticalGradient(
-                0f to Color(0xFF5CD6E8).copy(alpha = 0f),
-                0.5f to Color(0xFF5CD6E8).copy(alpha = 0.10f),
-                1f to Color(0xFF5CD6E8).copy(alpha = 0f),
-                startY = h * 0.37f,
-                endY = h * 0.62f,
-            ),
-            topLeft = Offset(0f, h * 0.37f),
-            size = androidx.compose.ui.geometry.Size(w, h * 0.25f),
-        )
-
-        // Center glow halo.
-        drawCircle(
-            brush = Brush.radialGradient(
-                0f to Color(0xFFFFC878).copy(alpha = 0.55f),
-                0.35f to Color(0xFFFFAF5E).copy(alpha = 0.30f),
-                0.7f to Color(0xFFFFAF5E).copy(alpha = 0.08f),
-                1f to Color(0xFFFFAF5E).copy(alpha = 0f),
-                center = Offset(cx, cy),
-                radius = w * 0.41f,
-            ),
-            center = Offset(cx, cy),
-            radius = w * 0.41f,
-        )
-
-        // Range rings (dashed).
-        val ringStroke = Stroke(
-            width = 1f.dp.toPx(),
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 8f)),
-        )
-        val ringColor = Color(0xFF94AFDC).copy(alpha = 0.18f)
-        floatArrayOf(0.166f, 0.274f, 0.381f).forEach { fr ->
-            drawCircle(
-                color = ringColor,
-                radius = w * fr,
-                center = Offset(cx, cy),
-                style = ringStroke,
-            )
-        }
-
-        // Signal arcs — top half, 4 progressively fainter.
-        // arc spans ±100° from straight up.
-        val arcs = listOf(
-            Arc(0.127f, 0.95f, 4.0f),
-            Arc(0.225f, 0.75f, 3.5f),
-            Arc(0.332f, 0.50f, 2.9f),
-            Arc(0.440f, 0.25f, 2.3f),
-        )
-        val ringBrush = Brush.linearGradient(
-            0f to Color(0xFFFFD7A0).copy(alpha = 0.95f),
-            0.5f to Color(0xFFFFAF5E).copy(alpha = 0.85f),
-            1f to Color(0xFFFF8A2C).copy(alpha = 0.65f),
-            start = Offset(0f, 0f),
-            end = Offset(w, h),
-        )
-        for (a in arcs) {
-            val r = w * a.radiusFraction
-            // Drawn as a circle's top half via arc.
-            drawArc(
-                brush = ringBrush,
-                startAngle = -190f,
-                sweepAngle = 200f,
-                useCenter = false,
-                topLeft = Offset(cx - r, cy - r),
-                size = androidx.compose.ui.geometry.Size(r * 2f, r * 2f),
-                alpha = a.opacity,
-                style = Stroke(width = a.strokeWidth.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round),
-            )
-        }
-
-        // Tiny sparks on outer arc edges.
-        listOf(
-            Offset(cx - w * 0.434f, cy),
-            Offset(cx + w * 0.434f, cy),
-            Offset(cx - w * 0.325f, cy - w * 0.039f),
-            Offset(cx + w * 0.325f, cy - w * 0.039f),
-        ).forEach {
-            drawCircle(color = AccentGlow.copy(alpha = 0.5f), radius = w * 0.006f, center = it)
-        }
-
-        // Center disc — operator QTH.
-        val discR = w * 0.076f
-        drawCircle(
-            brush = Brush.verticalGradient(
-                0f to Color(0xFFFFD7A0),
-                0.5f to Color(0xFFFFAF5E),
-                1f to Color(0xFFFF8A2C),
-                startY = cy - discR,
-                endY = cy + discR,
-            ),
-            radius = discR,
-            center = Offset(cx, cy),
-        )
-        drawCircle(
-            color = Color(0xFFFFE6BE).copy(alpha = 0.6f),
-            radius = discR,
-            center = Offset(cx, cy),
-            style = Stroke(width = 0.6f.dp.toPx()),
-        )
-        // Specular highlight on the disc.
-        drawOval(
-            color = Color(0xFFFFF5DC).copy(alpha = 0.55f),
-            topLeft = Offset(cx - discR * 0.45f, cy - discR * 0.55f),
-            size = androidx.compose.ui.geometry.Size(discR * 0.7f, discR * 0.42f),
-        )
-
-        // Top-edge shine.
-        drawRect(
-            brush = Brush.verticalGradient(
-                0f to Color.White.copy(alpha = 0.12f),
-                0.4f to Color.White.copy(alpha = 0f),
-                startY = 0f,
-                endY = h * 0.4f,
-            ),
-            topLeft = Offset(0f, 0f),
-            size = androidx.compose.ui.geometry.Size(w, h * 0.23f),
-        )
-    }
-}
-
-private data class Arc(val radiusFraction: Float, val opacity: Float, val strokeWidth: Float)
 
 @Composable
 private fun LoadingDots(label: String, color: Color) {
