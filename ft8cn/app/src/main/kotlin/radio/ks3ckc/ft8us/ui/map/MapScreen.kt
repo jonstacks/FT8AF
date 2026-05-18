@@ -1,5 +1,11 @@
 package radio.ks3ckc.ft8us.ui.map
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -311,6 +317,19 @@ private fun AzimuthalMapCanvas(
     onStationSelected: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Shared infinite transition drives every station's pulse phase via index offsets,
+    // so we avoid N independent animations.
+    val pulseTransition = rememberInfiniteTransition(label = "map-pulse")
+    val pulsePhase by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "map-pulse-phase",
+    )
+
     Canvas(modifier = modifier) {
         val cx = size.width / 2f
         val cy = size.height / 2f
@@ -340,7 +359,7 @@ private fun AzimuthalMapCanvas(
         )
 
         // Station markers
-        for (station in stations) {
+        for ((index, station) in stations.withIndex()) {
             val proj = azProject(opLat, opLon, station.lat, station.lon)
             val sx = cx + proj.x * r
             val sy = cy + proj.y * r
@@ -353,6 +372,24 @@ private fun AzimuthalMapCanvas(
             val isSelected = station.callsign == selectedCallsign
             val markerR = if (isSelected) 5f else 3.5f
             val glowR = if (isSelected) 12f else 8f
+
+            // Pulse rings: 2 expanding rings per station, staggered by 0.5 phase. Phase derived from
+            // shared infinite transition with per-station offset (no per-marker InfiniteTransition).
+            val baseAmp = if (isSelected) 1f else 0.55f
+            val stationOffset = (index * 0.137f) % 1f
+            for (ringIndex in 0..1) {
+                val phase = ((pulsePhase + stationOffset + ringIndex * 0.5f) % 1f)
+                val ringR = glowR + (16f + (if (isSelected) 10f else 0f)) * phase
+                val ringAlpha = (1f - phase) * 0.35f * baseAmp
+                if (ringAlpha > 0f) {
+                    drawCircle(
+                        color = station.color.copy(alpha = ringAlpha),
+                        radius = ringR,
+                        center = Offset(sx, sy),
+                        style = Stroke(width = 1f),
+                    )
+                }
+            }
 
             // Bearing line for selected station
             if (isSelected) {

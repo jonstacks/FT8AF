@@ -1,6 +1,7 @@
 package radio.ks3ckc.ft8us.ui.logbook
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -31,7 +32,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import radio.ks3ckc.ft8us.ui.motion.MotionTokens
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
@@ -61,8 +64,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import radio.ks3ckc.ft8us.theme.*
+import radio.ks3ckc.ft8us.ui.components.AnimatedCounter
+import radio.ks3ckc.ft8us.ui.components.EmptyStateWaves
 import radio.ks3ckc.ft8us.ui.components.GlassCard
 import radio.ks3ckc.ft8us.ui.components.QsoStatus
+import radio.ks3ckc.ft8us.ui.components.ShimmerBox
 import radio.ks3ckc.ft8us.ui.components.StatusPill
 import radio.ks3ckc.ft8us.ui.components.TopBar
 import radio.ks3ckc.ft8us.ui.components.TopBarSubtitle
@@ -237,10 +243,74 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
 
         // Tab content
         when (activeTab) {
-            LogbookTab.STATS -> StatsTab(stats, records)
+            LogbookTab.STATS -> if (isLoading) StatsLoadingPlaceholder() else StatsTab(stats, records)
             LogbookTab.RECENT -> RecentTab(records)
             LogbookTab.AWARDS -> AwardsTab(stats)
         }
+    }
+}
+
+@Composable
+private fun StatsLoadingPlaceholder() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+        }
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp),
+            cornerRadius = 16.dp,
+        )
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp),
+            cornerRadius = 12.dp,
+        )
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(140.dp),
+            cornerRadius = 16.dp,
+        )
     }
 }
 
@@ -307,6 +377,24 @@ private fun SegmentedTabRow(
 
 @Composable
 private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
+    // Animate charts in from 0 once on first render of this tab in this process lifecycle.
+    var hasAnimated by rememberSaveable { mutableStateOf(false) }
+    var animTarget by remember { mutableStateOf(if (hasAnimated) 1f else 0f) }
+    val chartProgress by animateFloatAsState(
+        targetValue = animTarget,
+        animationSpec = tween(
+            durationMillis = MotionTokens.DurXSlow,
+            easing = MotionTokens.EasingEmphasizedDecel,
+        ),
+        label = "stats-tab-chart-progress",
+    )
+    LaunchedEffect(Unit) {
+        if (!hasAnimated) {
+            animTarget = 1f
+            hasAnimated = true
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -321,13 +409,13 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
         ) {
             BigStatCard(
                 label = "Total QSOs",
-                value = stats.totalQsos.toString(),
+                value = stats.totalQsos,
                 accentColor = Accent,
                 modifier = Modifier.weight(1f),
             )
             BigStatCard(
                 label = "DXCC Entities",
-                value = stats.dxccEntities.toString(),
+                value = stats.dxccEntities,
                 accentColor = Signal,
                 modifier = Modifier.weight(1f),
             )
@@ -339,13 +427,13 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
         ) {
             BigStatCard(
                 label = "CQ Zones",
-                value = stats.cqZones.toString(),
+                value = stats.cqZones,
                 accentColor = StatusNew,
                 modifier = Modifier.weight(1f),
             )
             BigStatCard(
                 label = "ITU Zones",
-                value = stats.ituZones.toString(),
+                value = stats.ituZones,
                 accentColor = Band17m,
                 modifier = Modifier.weight(1f),
             )
@@ -356,6 +444,7 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
             SectionHeader("Band Distribution")
             BandDonutChart(
                 bandCounts = stats.bandCounts,
+                progress = chartProgress,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -367,24 +456,28 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
             current = stats.dxccEntities,
             total = 340,
             gradientColors = listOf(Signal, StatusConfirmed),
+            progress = chartProgress,
         )
         AwardProgressBar(
             label = "VUCC Grid Squares",
             current = gridSquaresWorked(records),
             total = 100,
             gradientColors = listOf(StatusNew, Band12m),
+            progress = chartProgress,
         )
         AwardProgressBar(
             label = "DXCC Challenge",
             current = stats.dxccEntities * stats.bandCounts.size.coerceAtLeast(1),
             total = 1000,
             gradientColors = listOf(Accent, Band17m),
+            progress = chartProgress,
         )
 
         // Grid square heatmap
         SectionHeader("Grid Coverage")
         GridSquareHeatmap(
             records = records,
+            progress = chartProgress,
             modifier = Modifier.fillMaxWidth(),
         )
 
@@ -392,6 +485,7 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
         SectionHeader("Signal Trend")
         SignalSparkline(
             records = records,
+            progress = chartProgress,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(72.dp),
@@ -408,17 +502,18 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
 @Composable
 private fun BigStatCard(
     label: String,
-    value: String,
+    value: Int,
     accentColor: Color,
     modifier: Modifier = Modifier,
 ) {
     GlassCard(modifier = modifier) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                text = value,
-                style = MaterialTheme.typography.displayMedium,
-                color = accentColor,
-                fontFamily = GeistMonoFamily,
+            AnimatedCounter(
+                value = value,
+                style = MaterialTheme.typography.displayMedium.copy(
+                    color = accentColor,
+                    fontFamily = GeistMonoFamily,
+                ),
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -456,6 +551,7 @@ private fun SectionHeader(text: String) {
 private fun BandDonutChart(
     bandCounts: List<Pair<String, Int>>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
     val total = bandCounts.sumOf { it.second }.coerceAtLeast(1)
     val arcGap = 3f
@@ -481,7 +577,7 @@ private fun BandDonutChart(
 
                 var startAngle = -90f
                 for ((band, count) in bandCounts) {
-                    val sweep = (count.toFloat() / total) * 360f - arcGap
+                    val sweep = ((count.toFloat() / total) * 360f - arcGap) * progress
                     if (sweep > 0f) {
                         drawArc(
                             color = bandColor(band),
@@ -543,8 +639,9 @@ private fun AwardProgressBar(
     total: Int,
     gradientColors: List<Color>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
-    val fraction = (current.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val fraction = ((current.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f)) * progress.coerceIn(0f, 1f)
     val trackShape = RoundedCornerShape(4.dp)
 
     GlassCard(modifier = modifier.fillMaxWidth()) {
@@ -601,6 +698,7 @@ private fun AwardProgressBar(
 private fun GridSquareHeatmap(
     records: List<QSLCallsignRecord>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
     // Build set of worked 2-char field designators (e.g., "FN", "JO")
     val workedFields = remember(records) {
@@ -632,7 +730,7 @@ private fun GridSquareHeatmap(
                         val isWorked = field in workedFields
 
                         val cellColor = when {
-                            isWorked -> Signal.copy(alpha = 0.7f)
+                            isWorked -> Signal.copy(alpha = 0.7f * progress.coerceIn(0f, 1f))
                             else -> BgSurface3.copy(alpha = 0.4f)
                         }
 
@@ -658,6 +756,7 @@ private fun GridSquareHeatmap(
 private fun SignalSparkline(
     records: List<QSLCallsignRecord>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
     // Extract SNR-like values from recent records; placeholder if records lack SNR field
     val dataPoints = remember(records) {
@@ -682,7 +781,12 @@ private fun SignalSparkline(
                 .fillMaxSize()
                 .padding(12.dp),
         ) {
-            drawSparkline(dataPoints, Signal, Signal.copy(alpha = 0.12f))
+            val p = progress.coerceIn(0f, 1f)
+            drawSparkline(
+                dataPoints,
+                Signal.copy(alpha = p),
+                Signal.copy(alpha = 0.12f * p),
+            )
         }
     }
 }
@@ -744,10 +848,13 @@ private fun gridSquaresWorked(records: List<QSLCallsignRecord>): Int =
 @Composable
 private fun RecentTab(records: List<QSLCallsignRecord>) {
     if (records.isEmpty()) {
-        Box(
+        Column(
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            EmptyStateWaves(size = 180.dp)
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "No QSOs recorded yet",
                 color = TextFaint,

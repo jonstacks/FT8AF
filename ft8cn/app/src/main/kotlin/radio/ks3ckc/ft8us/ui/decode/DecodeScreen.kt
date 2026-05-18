@@ -32,6 +32,7 @@ import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.timer.UtcTimer
 import radio.ks3ckc.ft8us.theme.*
+import radio.ks3ckc.ft8us.ui.components.EmptyStateWaves
 import radio.ks3ckc.ft8us.ui.components.FilterChips
 import radio.ks3ckc.ft8us.ui.components.TopBar
 import radio.ks3ckc.ft8us.ui.components.TopBarSubtitle
@@ -67,6 +68,18 @@ fun DecodeScreen(
     // Apply filter
     val filteredMessages = remember(messages, selectedFilter) {
         filterMessages(messages, selectedFilter)
+    }
+
+    // Track which keys are new since the previous render (animated on entry only once).
+    var seenKeys by remember { mutableStateOf(emptySet<String>()) }
+    val currentKeys = remember(filteredMessages) {
+        filteredMessages.mapIndexed { i, m ->
+            "${m.utcTime}_${m.callsignFrom}_${m.freq_hz}_$i"
+        }.toSet()
+    }
+    val newKeys = remember(currentKeys) { currentKeys - seenKeys }
+    LaunchedEffect(currentKeys) {
+        seenKeys = seenKeys + currentKeys
     }
 
     // Auto-scroll state
@@ -129,9 +142,11 @@ fun DecodeScreen(
                     itemsIndexed(
                         items = filteredMessages,
                         key = { index, msg -> "${msg.utcTime}_${msg.callsignFrom}_${msg.freq_hz}_$index" },
-                    ) { _, message ->
+                    ) { index, message ->
+                        val rowKey = "${message.utcTime}_${message.callsignFrom}_${message.freq_hz}_$index"
                         DecodeRow(
                             message = message,
+                            animateEntry = rowKey in newKeys,
                             onClick = {
                                 selectedMessage = message
                                 sheetVisible = true
@@ -206,6 +221,8 @@ private fun EmptyState(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        EmptyStateWaves(size = 180.dp)
+        Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = title,
             color = TextMuted,

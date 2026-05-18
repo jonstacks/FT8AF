@@ -17,6 +17,12 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import android.os.Handler
@@ -95,10 +101,23 @@ class ComposeMainActivity : ComponentActivity() {
             mainViewModel.setBlueToothOn()
         }
 
-        // Set Compose UI
+        // Set Compose UI — splash plays once per cold start, then crossfades into the app.
         setContent {
             FT8USTheme {
-                FT8USApp(mainViewModel)
+                var showSplash by remember { mutableStateOf(true) }
+                Crossfade(
+                    targetState = showSplash,
+                    animationSpec = tween(durationMillis = 360),
+                    label = "splash-crossfade",
+                ) { isSplash ->
+                    if (isSplash) {
+                        radio.ks3ckc.ft8us.ui.splash.FT8USplashScreen(
+                            onSplashComplete = { showSplash = false }
+                        )
+                    } else {
+                        FT8USApp(mainViewModel)
+                    }
+                }
             }
         }
 

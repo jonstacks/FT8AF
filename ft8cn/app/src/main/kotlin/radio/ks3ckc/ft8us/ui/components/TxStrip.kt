@@ -127,16 +127,18 @@ fun TxStrip(
                     .clip(RoundedCornerShape(8.dp))
                     .background(buttonBg)
                     .clickable { if (isActivated) onStop() else onCallCQ() }
-                    .padding(horizontal = 28.dp, vertical = 12.dp),
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = buttonLabel,
                     color = buttonTextColor,
-                    fontSize = 16.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = GeistMonoFamily,
                     letterSpacing = 0.04.sp,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
 
@@ -156,6 +158,8 @@ fun TxStrip(
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = GeistMonoFamily,
                     letterSpacing = 0.02.sp,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
         }
@@ -204,6 +208,3 @@ private fun PulseDot(color: Color) {
         )
     }
 }
-
-// Re-export the font families for use in TxStrip
-private val GeistMonoFamily = radio.ks3ckc.ft8us.theme.GeistMonoFamily
