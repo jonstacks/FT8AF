@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -26,7 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +42,7 @@ import com.bg7yoz.ft8cn.Ft8Message
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.ft8transmit.FunctionOfTransmit
+import com.bg7yoz.ft8cn.ft8transmit.QueuedCaller
 import radio.ks3ckc.ft8us.theme.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -70,17 +74,36 @@ fun ActiveQsoPanel(
     modifier: Modifier = Modifier,
 ) {
     val toCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
+    val isActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
     val functions by mainViewModel.ft8TransmitSignal.mutableFunctions.observeAsState(arrayListOf())
     val functionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
     val messageList by mainViewModel.mutableFt8MessageList.observeAsState(arrayListOf())
     val transmittingMessage by mainViewModel.ft8TransmitSignal.mutableTransmittingMessage.observeAsState("")
+    val callerQueue by mainViewModel.ft8TransmitSignal.mutableCallerQueue.observeAsState(arrayListOf())
 
-    val targetCallsign = toCallsign?.callsign ?: "CQ"
-    val hasTarget = targetCallsign != "CQ" && targetCallsign.isNotEmpty()
+    val liveCallsign = toCallsign?.callsign ?: "CQ"
+
+    // Remember the last real (non-CQ) callsign so the panel stays visible
+    // after resetToCQ() until isActivated goes false
+    var rememberedCallsign by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(liveCallsign) {
+        if (liveCallsign != "CQ" && liveCallsign.isNotEmpty()) {
+            rememberedCallsign = liveCallsign
+        }
+    }
+    LaunchedEffect(isActivated) {
+        if (!isActivated) {
+            rememberedCallsign = null
+        }
+    }
+
+    // Use the live callsign if it's a real target, otherwise fall back to remembered
+    val displayCallsign = if (liveCallsign != "CQ" && liveCallsign.isNotEmpty()) liveCallsign else rememberedCallsign
+    val hasTarget = displayCallsign != null
 
     // Filter messages to/from the target station
-    val qsoMessages: List<QsoLogEntry> = remember(messageList, messageList?.size, targetCallsign, transmittingMessage) {
-        if (!hasTarget) return@remember emptyList()
+    val qsoMessages: List<QsoLogEntry> = remember(messageList, messageList?.size, displayCallsign, transmittingMessage) {
+        if (!hasTarget || displayCallsign == null) return@remember emptyList()
 
         val entries = mutableListOf<QsoLogEntry>()
 
@@ -92,7 +115,7 @@ fun ActiveQsoPanel(
 
             when {
                 // RX: target station calling us
-                from.equals(targetCallsign, ignoreCase = true) &&
+                from.equals(displayCallsign, ignoreCase = true) &&
                         (to.equals(myCallsign, ignoreCase = true) || GeneralVariables.checkIsMyCallsign(to)) -> {
                     entries.add(
                         QsoLogEntry(
@@ -104,7 +127,7 @@ fun ActiveQsoPanel(
                     )
                 }
                 // TX: us calling the target station (messages from us in the decoded list)
-                from.equals(myCallsign, ignoreCase = true) && to.equals(targetCallsign, ignoreCase = true) -> {
+                from.equals(myCallsign, ignoreCase = true) && to.equals(displayCallsign, ignoreCase = true) -> {
                     entries.add(
                         QsoLogEntry(
                             direction = QsoLogEntry.Direction.TX,
@@ -119,7 +142,7 @@ fun ActiveQsoPanel(
     }
 
     AnimatedVisibility(
-        visible = expanded && hasTarget,
+        visible = expanded && (hasTarget || isActivated),
         enter = expandVertically(expandFrom = Alignment.Bottom),
         exit = shrinkVertically(shrinkTowards = Alignment.Bottom),
         modifier = modifier,
@@ -139,7 +162,10 @@ fun ActiveQsoPanel(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             // Station header
-            StationHeader(targetCallsign = targetCallsign, snr = toCallsign?.snr)
+            StationHeader(
+                targetCallsign = displayCallsign ?: "Searching...",
+                snr = if (displayCallsign != null) toCallsign?.snr else null,
+            )
 
             Spacer(modifier = Modifier.height(6.dp))
 
@@ -157,6 +183,9 @@ fun ActiveQsoPanel(
                     mainViewModel.ft8TransmitSignal.mutableFunctionOrder.postValue(order)
                 },
             )
+
+            // Caller queue display
+            CallerQueueBar(queue = callerQueue ?: arrayListOf())
         }
     }
 }
@@ -384,6 +413,52 @@ private fun TxSelector(
                     fontFamily = GeistMonoFamily,
                     letterSpacing = 0.02.sp,
                 )
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CallerQueueBar(queue: ArrayList<QueuedCaller>) {
+    if (queue.isEmpty()) return
+
+    Spacer(modifier = Modifier.height(6.dp))
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "QUEUE",
+            color = TextFaint,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = GeistMonoFamily,
+            letterSpacing = 0.04.sp,
+        )
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            queue.forEach { caller ->
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(SignalSoft)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = caller.callsign,
+                        color = Signal,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = GeistMonoFamily,
+                    )
+                }
             }
         }
     }
