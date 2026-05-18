@@ -339,12 +339,13 @@ public class MainViewModel extends ViewModel {
 
                 //check transmit procedure. Parse transmit procedure from message list
                 //if exceeded cycle by 2 seconds, should not parse
+                int autoReplyBudgetMs = Math.max(2000, GeneralVariables.lateStartTolerance);
                 if (!ft8TransmitSignal.isTransmitting()
                         && !isDeep//block deep decode from activating auto procedure
                         //deep decode list should be added to the new message list without deep decode
                         && (ft8SignalListener.timeSec
                         + GeneralVariables.pttDelay
-                        + GeneralVariables.transmitDelay <= 2000)) {//considering network mode, transmit duration is 13 seconds
+                        + GeneralVariables.transmitDelay <= autoReplyBudgetMs)) {//budget scales with late-start tolerance
                     ft8TransmitSignal.parseMessageToFunction(messages);//parse messages and process
                 }
 

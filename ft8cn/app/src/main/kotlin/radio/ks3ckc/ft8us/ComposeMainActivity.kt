@@ -31,6 +31,7 @@ import com.bg7yoz.ft8cn.callsign.CallsignDatabase
 import com.bg7yoz.ft8cn.database.DatabaseOpr
 import com.bg7yoz.ft8cn.database.OnAfterQueryConfig
 import com.bg7yoz.ft8cn.database.OperationBand
+import com.bg7yoz.ft8cn.location.GridLocationUpdater
 import com.bg7yoz.ft8cn.log.ImportSharedLogs
 import com.bg7yoz.ft8cn.log.OnShareLogEvents
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
@@ -174,10 +175,13 @@ class ComposeMainActivity : ComponentActivity() {
                     "baudRate=${GeneralVariables.baudRate}, " +
                     "controlMode=${GeneralVariables.controlMode}, " +
                     "connectMode=${GeneralVariables.connectMode}")
-                val grid = MaidenheadGrid.getMyMaidenheadGrid(applicationContext)
-                if (grid.isNotEmpty()) {
-                    GeneralVariables.setMyMaidenheadGrid(grid)
-                    mainViewModel.databaseOpr.writeConfig("grid", grid, null)
+                if (GeneralVariables.autoUpdateGridFromGPS) {
+                    val grid = MaidenheadGrid.getMyMaidenheadGrid(applicationContext)
+                    if (grid.isNotEmpty()) {
+                        GeneralVariables.setMyMaidenheadGrid(grid)
+                        mainViewModel.databaseOpr.writeConfig("grid", grid, null)
+                    }
+                    GridLocationUpdater.refresh(applicationContext, mainViewModel)
                 }
                 mainViewModel.ft8TransmitSignal.setTimer_sec(GeneralVariables.transmitDelay)
 

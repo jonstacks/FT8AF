@@ -229,6 +229,8 @@ public class LogQSLAdapter extends RecyclerView.Adapter<LogQSLAdapter.LogQSLItem
                                         , GeneralVariables.getStringFromResource(R.string.log_menu_location))
                                 .setActionView(view);
                     }
+
+                    contextMenu.add(0, 4, 0, "Edit QSO").setActionView(view);
                 }
             });
         }

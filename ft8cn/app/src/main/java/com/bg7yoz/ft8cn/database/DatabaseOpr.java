@@ -735,6 +735,24 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         new SetQSLTableIsQSL(db, id, isQSL).execute();
     }
 
+    /**
+     * Update an existing QSL record by id with the supplied column values.
+     * Runs on a background thread; SQLite handles concurrent reads.
+     */
+    public void updateQSLRecord(final int id, final android.content.ContentValues values) {
+        if (values == null || values.size() == 0) return;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    db.update("QSLTable", values, "id=?", new String[]{String.valueOf(id)});
+                } catch (Exception e) {
+                    Log.e(TAG, "updateQSLRecord failed: " + e.getMessage());
+                }
+            }
+        }).start();
+    }
+
     public void setQSLCallsignIsQSL(boolean isQSL, int id) {
         new SetQSLCallsignIsQSL(db, id, isQSL).execute();
     }
@@ -2147,8 +2165,21 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("autoCallFollow")) {//Auto-call followed stations
                     GeneralVariables.autoCallFollow = (result.equals("") || result.equals("1"));
                 }
+                if (name.equalsIgnoreCase("autoGridFromGPS")) {//Auto-update grid from GPS
+                    GeneralVariables.autoUpdateGridFromGPS = result.equals("1");
+                }
                 if (name.equalsIgnoreCase("pttDelay")) {//PTT delay setting
                     GeneralVariables.pttDelay = result.equals("") ? 100 : Integer.parseInt(result);
+                }
+                if (name.equalsIgnoreCase("lateStartTolerance")) {//Late-start tolerance, ms (0-4000)
+                    try {
+                        int v = result.equals("") ? 2000 : Integer.parseInt(result);
+                        if (v < 0) v = 0;
+                        if (v > 4000) v = 4000;
+                        GeneralVariables.lateStartTolerance = v;
+                    } catch (NumberFormatException nfe) {
+                        GeneralVariables.lateStartTolerance = 2000;
+                    }
                 }
                 if (name.equalsIgnoreCase("icomIp")) {//ICOM IP address
                     GeneralVariables.icomIp = result.equals("") ? "255.255.255.255" : result;

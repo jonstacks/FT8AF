@@ -81,6 +81,10 @@ public class FT8TransmitSignal {
     private AudioFormat myFormat = null;
     private AudioTrack audioTrack = null;
 
+    // Milliseconds we are late into the current cycle; leading audio is clipped
+    // so the TX still finishes on the cycle boundary. Set just before playback.
+    private volatile int lateStartSkipMs = 0;
+
     public UtcTimer utcTimer;
 
 
@@ -173,7 +177,11 @@ public class FT8TransmitSignal {
         resetTargetReport();
 
         if (UtcTimer.getNowSequential() == sequential) {
-            if ((UtcTimer.getSystemTime() % 15000) < 2500) {
+            long msInCycle = UtcTimer.getSystemTime() % 15000;
+            int tolerance = GeneralVariables.lateStartTolerance;
+            if (tolerance < 0) tolerance = 0;
+            if (tolerance > 4000) tolerance = 4000;
+            if (msInCycle < tolerance) {
                 setTransmitting(false);
                 doTransmit();
             }
@@ -441,19 +449,25 @@ public class FT8TransmitSignal {
             audioTrack.setPreferredDevice(deviceInfo); // null resets to default
         }
 
+        // Skip leading samples if we started transmitting late, so audio still ends on the cycle boundary.
+        int skipSamples = (lateStartSkipMs * GeneralVariables.audioSampleRate) / 1000;
+        if (skipSamples < 0) skipSamples = 0;
+        if (skipSamples >= buffer.length) skipSamples = 0;
+        int playLength = buffer.length - skipSamples;
+
         // distinguish between 32-bit float and integer
         int writeResult;
         if (GeneralVariables.audioOutput32Bit) {
-            writeResult = audioTrack.write(buffer, 0, buffer.length
+            writeResult = audioTrack.write(buffer, skipSamples, playLength
                     , AudioTrack.WRITE_NON_BLOCKING);
         } else {
             short[] audio_data = float2Short(buffer);
-            writeResult = audioTrack.write(audio_data, 0, audio_data.length
+            writeResult = audioTrack.write(audio_data, skipSamples, playLength
                     , AudioTrack.WRITE_NON_BLOCKING);
         }
 
-        if (buffer.length > writeResult) {
-            Log.e(TAG, String.format("Playback buffer insufficient: %d--->%d", buffer.length, writeResult));
+        if (playLength > writeResult) {
+            Log.e(TAG, String.format("Playback buffer insufficient: %d--->%d", playLength, writeResult));
         }
 
         // check write result; if abnormal, release resources immediately
@@ -466,7 +480,7 @@ public class FT8TransmitSignal {
             afterPlayAudio();
             return;
         }
-        audioTrack.setNotificationMarkerPosition(buffer.length);
+        audioTrack.setNotificationMarkerPosition(playLength);
         audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
             @Override
             public void onMarkerReached(AudioTrack audioTrack) {
@@ -537,10 +551,16 @@ public class FT8TransmitSignal {
             return;
         }
 
+        // Skip leading samples if we started transmitting late, so audio still ends on the cycle boundary.
+        int skipSamples = (lateStartSkipMs * GeneralVariables.audioSampleRate) / 1000;
+        if (skipSamples < 0) skipSamples = 0;
+        if (skipSamples >= buffer.length) skipSamples = 0;
+        int playLength = buffer.length - skipSamples;
+
         // Apply volume
-        float[] volumeAdjusted = new float[buffer.length];
-        for (int i = 0; i < buffer.length; i++) {
-            volumeAdjusted[i] = buffer[i] * GeneralVariables.volumePercent;
+        float[] volumeAdjusted = new float[playLength];
+        for (int i = 0; i < playLength; i++) {
+            volumeAdjusted[i] = buffer[skipSamples + i] * GeneralVariables.volumePercent;
         }
 
         boolean success = usbDev.writeAudio(volumeAdjusted, GeneralVariables.audioSampleRate);
@@ -1307,6 +1327,17 @@ public class FT8TransmitSignal {
                 Thread.sleep(GeneralVariables.pttDelay);// response time after PTT command, default 100ms
             } catch (InterruptedException e) {
                 e.printStackTrace();
+            }
+
+            // Compute how late we are into this 15-second cycle; leading audio will be clipped
+            // so transmission still ends on the cycle boundary.
+            int msLate = (int) (UtcTimer.getSystemTime() % 15000);
+            if (msLate < 0) msLate = 0;
+            if (msLate >= 15000) msLate = 14999;
+            transmitSignal.lateStartSkipMs = msLate;
+            if (msLate > 100) {
+                Log.d(TAG, String.format("Late start: skipping %d ms of leading audio", msLate));
+                ToastMessage.show(String.format("Late start: −%d ms", msLate));
             }
 
 //            if (transmitSignal.onDoTransmitted != null) {//process audio data for ICOM network mode transmission

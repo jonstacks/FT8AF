@@ -191,6 +191,7 @@ public class GeneralVariables {
     public static boolean synFrequency = false;//Same-frequency transmit
     public static int transmitDelay = 500;//Transmit delay; also allows decoding time for the previous cycle
     public static int pttDelay = 100;//PTT response time; radios typically need some response time after PTT command, default 100ms
+    public static int lateStartTolerance = 2000;//Max ms into a cycle that a manual TX may start; leading audio is clipped so TX still ends on the cycle boundary. 0-4000.
     public static int civAddress = 0xa4;//CI-V address
     public static int baudRate = 19200;//Baud rate
     public static long band = 14074000;//Carrier frequency band
@@ -217,6 +218,7 @@ public class GeneralVariables {
 
     public static boolean autoFollowCQ = true;//Auto-follow CQ
     public static boolean autoCallFollow = true;//Auto-call followed callsigns
+    public static boolean autoUpdateGridFromGPS = false;//Use device GPS to keep Maidenhead grid current
     public static ArrayList<String> QSL_Callsign_list = new ArrayList<>();//Successfully QSL'd callsigns
     public static ArrayList<String> QSL_Callsign_list_other_band = new ArrayList<>();//Successfully QSL'd callsigns on other bands
 
