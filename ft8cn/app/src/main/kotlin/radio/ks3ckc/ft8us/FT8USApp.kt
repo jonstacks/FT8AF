@@ -1,5 +1,13 @@
 package radio.ks3ckc.ft8us
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +30,9 @@ import com.bg7yoz.ft8cn.database.OperationBand
 import radio.ks3ckc.ft8us.theme.BgApp
 import radio.ks3ckc.ft8us.ui.components.ActiveQsoPanel
 import radio.ks3ckc.ft8us.ui.components.FT8USTab
+import radio.ks3ckc.ft8us.ui.components.QsoCelebration
 import radio.ks3ckc.ft8us.ui.components.TabBar
+import radio.ks3ckc.ft8us.ui.components.TransmitGlow
 import radio.ks3ckc.ft8us.ui.components.TxStrip
 import radio.ks3ckc.ft8us.ui.decode.DecodeScreen
 import radio.ks3ckc.ft8us.ui.logbook.LogbookScreen
@@ -39,6 +49,7 @@ fun FT8USApp(mainViewModel: MainViewModel) {
     val isTransmitting by mainViewModel.ft8TransmitSignal.mutableIsTransmitting.observeAsState(false)
     val isActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
     val txSlot by mainViewModel.ft8TransmitSignal.mutableSequential.observeAsState(mainViewModel.ft8TransmitSignal.sequential)
+    val qsoCompletedAt by mainViewModel.ft8TransmitSignal.mutableQsoCompletedAt.observeAsState()
 
     // QSO panel expand/collapse state
     var qsoPanelExpanded by rememberSaveable { mutableStateOf(false) }
@@ -63,66 +74,83 @@ fun FT8USApp(mainViewModel: MainViewModel) {
     } else {
         GeneralVariables.getBandString()
     }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(BgApp),
-    ) {
-        // Main content area (takes remaining space)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+    Box(modifier = Modifier.fillMaxSize().background(BgApp)) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
         ) {
-            // Keep all screens in memory for real-time updates.
-            // Only the active tab is shown; others remain composed but hidden.
-            when (activeTab) {
-                FT8USTab.DECODE -> DecodeScreen(mainViewModel)
-                FT8USTab.MAP -> MapScreen(mainViewModel)
-                FT8USTab.WATERFALL -> WaterfallScreen(mainViewModel)
-                FT8USTab.LOG -> LogbookScreen(mainViewModel)
-                FT8USTab.SETTINGS -> SettingsScreen(mainViewModel)
+            // Main content area (takes remaining space)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                AnimatedContent(
+                    targetState = activeTab,
+                    transitionSpec = {
+                        val forward = targetState.ordinal > initialState.ordinal
+                        val dir = if (forward) 1 else -1
+                        (fadeIn(tween(240)) + slideInHorizontally(tween(240)) { fullWidth -> dir * fullWidth / 12 }) togetherWith
+                            (fadeOut(tween(120)) + slideOutHorizontally(tween(240)) { fullWidth -> -dir * fullWidth / 12 }) using
+                            SizeTransform(clip = false)
+                    },
+                    label = "tab-content",
+                ) { tab ->
+                    when (tab) {
+                        FT8USTab.DECODE -> DecodeScreen(mainViewModel)
+                        FT8USTab.MAP -> MapScreen(mainViewModel)
+                        FT8USTab.WATERFALL -> WaterfallScreen(mainViewModel)
+                        FT8USTab.LOG -> LogbookScreen(mainViewModel)
+                        FT8USTab.SETTINGS -> SettingsScreen(mainViewModel)
+                    }
+                }
             }
+
+            // Active QSO panel — slides up above TxStrip when a QSO is in progress
+            ActiveQsoPanel(
+                mainViewModel = mainViewModel,
+                expanded = qsoPanelExpanded,
+                onCollapse = { qsoPanelExpanded = false },
+            )
+
+            // TX status strip — always visible above tab bar
+            TxStrip(
+                isTransmitting = isTransmitting,
+                isActivated = isActivated,
+                bandLabel = bandLabel,
+                txSlot = txSlot,
+                expanded = qsoPanelExpanded,
+                onCallCQ = {
+                    if (GeneralVariables.myCallsign.isNullOrEmpty()) {
+                        Toast.makeText(context, "Set your callsign in Settings before calling CQ", Toast.LENGTH_SHORT).show()
+                    } else {
+                        mainViewModel.ft8TransmitSignal.resetToCQ()
+                        mainViewModel.ft8TransmitSignal.setActivated(true)
+                    }
+                },
+                onStop = {
+                    mainViewModel.ft8TransmitSignal.setActivated(false)
+                },
+                onToggleSlot = {
+                    val current = mainViewModel.ft8TransmitSignal.sequential
+                    val newSlot = if (current == 0) 1 else 0
+                    mainViewModel.ft8TransmitSignal.sequential = newSlot
+                    mainViewModel.ft8TransmitSignal.mutableSequential.postValue(newSlot)
+                },
+                onToggleExpand = { qsoPanelExpanded = !qsoPanelExpanded },
+            )
+
+            // Bottom tab bar
+            TabBar(
+                activeTab = activeTab,
+                onTabSelected = { activeTab = it },
+            )
         }
 
-        // Active QSO panel — slides up above TxStrip when a QSO is in progress
-        ActiveQsoPanel(
-            mainViewModel = mainViewModel,
-            expanded = qsoPanelExpanded,
-            onCollapse = { qsoPanelExpanded = false },
-        )
+        // Transmit breathing border — sibling overlay so its per-frame invalidations
+        // don't bubble into the waterfall composable. Pointer events pass through.
+        TransmitGlow(isTransmitting = isTransmitting)
 
-        // TX status strip — always visible above tab bar
-        TxStrip(
-            isTransmitting = isTransmitting,
-            isActivated = isActivated,
-            bandLabel = bandLabel,
-            txSlot = txSlot,
-            expanded = qsoPanelExpanded,
-            onCallCQ = {
-                if (GeneralVariables.myCallsign.isNullOrEmpty()) {
-                    Toast.makeText(context, "Set your callsign in Settings before calling CQ", Toast.LENGTH_SHORT).show()
-                } else {
-                    mainViewModel.ft8TransmitSignal.resetToCQ()
-                    mainViewModel.ft8TransmitSignal.setActivated(true)
-                }
-            },
-            onStop = {
-                mainViewModel.ft8TransmitSignal.setActivated(false)
-            },
-            onToggleSlot = {
-                val current = mainViewModel.ft8TransmitSignal.sequential
-                val newSlot = if (current == 0) 1 else 0
-                mainViewModel.ft8TransmitSignal.sequential = newSlot
-                mainViewModel.ft8TransmitSignal.mutableSequential.postValue(newSlot)
-            },
-            onToggleExpand = { qsoPanelExpanded = !qsoPanelExpanded },
-        )
-
-        // Bottom tab bar
-        TabBar(
-            activeTab = activeTab,
-            onTabSelected = { activeTab = it },
-        )
+        // One-shot particle burst when a QSO completes.
+        QsoCelebration(triggerAt = qsoCompletedAt)
     }
 }

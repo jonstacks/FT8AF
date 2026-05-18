@@ -15,10 +15,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,6 +35,7 @@ import radio.ks3ckc.ft8us.theme.*
 import radio.ks3ckc.ft8us.ui.components.QsoStatus
 import radio.ks3ckc.ft8us.ui.components.SignalBar
 import radio.ks3ckc.ft8us.ui.components.StatusPill
+import radio.ks3ckc.ft8us.ui.motion.MotionTokens
 
 /**
  * A single decoded FT8 message row.
@@ -53,6 +59,7 @@ fun DecodeRow(
     message: Ft8Message,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    animateEntry: Boolean = false,
 ) {
     val isCQ = message.checkIsCQ()
     val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
@@ -71,9 +78,29 @@ fun DecodeRow(
         else -> Color.Transparent
     }
 
+    val entryAnim = remember { Animatable(if (animateEntry) 0f else 1f) }
+    LaunchedEffect(animateEntry) {
+        if (animateEntry) {
+            entryAnim.snapTo(0f)
+            entryAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = MotionTokens.DurMed,
+                    easing = MotionTokens.EasingEmphasizedDecel,
+                ),
+            )
+        } else {
+            entryAnim.snapTo(1f)
+        }
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                alpha = entryAnim.value
+                translationY = (1f - entryAnim.value) * -12f
+            }
             .padding(horizontal = 12.dp, vertical = 3.dp)
             .clip(shape)
             .background(bgColor, shape)

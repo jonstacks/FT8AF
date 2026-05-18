@@ -58,6 +58,9 @@ public class FT8TransmitSignal {
     private volatile boolean isTransmitting = false;
     public MutableLiveData<Boolean> mutableIsTransmitting = new MutableLiveData<>();// whether currently transmitting
     public MutableLiveData<String> mutableTransmittingMessage = new MutableLiveData<>();// current message content
+    // Posts a tick (the QSO end timestamp) every time a QSO completes successfully — used to drive
+    // UI celebrations. Observers should treat the value as a one-shot signal (consume + ignore prior).
+    public MutableLiveData<Long> mutableQsoCompletedAt = new MutableLiveData<>();
 
     //public MutableLiveData<Integer> currentOrder = new MutableLiveData<>();// current command to transmit
 
@@ -646,6 +649,7 @@ public class FT8TransmitSignal {
             GeneralVariables.addQSLCallsign(toCallsign.callsign);// add successfully contacted callsign to the list
             ToastMessage.show(String.format("QSO : %s , at %s", toCallsign.callsign
                     , BaseRigOperation.getFrequencyAllInfo(GeneralVariables.band)));
+            mutableQsoCompletedAt.postValue(messageEndTime);// signal UI celebration
         }
 
     }

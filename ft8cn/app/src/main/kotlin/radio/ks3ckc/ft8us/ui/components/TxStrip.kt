@@ -204,6 +204,3 @@ private fun PulseDot(color: Color) {
         )
     }
 }
-
-// Re-export the font families for use in TxStrip
-private val GeistMonoFamily = radio.ks3ckc.ft8us.theme.GeistMonoFamily

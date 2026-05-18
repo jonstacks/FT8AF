@@ -2,16 +2,25 @@ package radio.ks3ckc.ft8us.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.bg7yoz.ft8cn.R
 
-// Geist font family — will be loaded from res/font/ once font files are added.
-// Until then, falls back to platform default sans-serif / monospace.
-// To enable: download Geist and Geist Mono .ttf files into res/font/ and
-// uncomment the Font() constructors in the FontFamily definitions.
-val GeistFamily: FontFamily = FontFamily.SansSerif
-val GeistMonoFamily: FontFamily = FontFamily.Monospace
+val GeistFamily: FontFamily = FontFamily(
+    Font(R.font.geist_regular, FontWeight.Normal),
+    Font(R.font.geist_medium, FontWeight.Medium),
+    Font(R.font.geist_semibold, FontWeight.SemiBold),
+    Font(R.font.geist_bold, FontWeight.Bold),
+)
+
+val GeistMonoFamily: FontFamily = FontFamily(
+    Font(R.font.geist_mono_regular, FontWeight.Normal),
+    Font(R.font.geist_mono_medium, FontWeight.Medium),
+    Font(R.font.geist_mono_semibold, FontWeight.SemiBold),
+    Font(R.font.geist_mono_bold, FontWeight.Bold),
+)
 
 val FT8USTypography = Typography(
     displayLarge = TextStyle(
