@@ -23,7 +23,7 @@ import java.util.Locale;
 
 /**
  * Sheet for exporting QSO records to ADIF, then either sharing via the system
- * share sheet or saving directly to Download/FT8US/. Replaces the legacy
+ * share sheet or saving directly to Download/FT8AF/. Replaces the legacy
  * ShareLogsProgressDialog flow.
  */
 public class ExportLogSheet extends Dialog {
@@ -113,7 +113,7 @@ public class ExportLogSheet extends Dialog {
                 if (adi == null) return;
                 final String startDate = nullIfEmpty(dateStart.getText().toString());
                 final String endDate = nullIfEmpty(dateEnd.getText().toString());
-                final String displayName = "ft8us-log-"
+                final String displayName = "ft8af-log-"
                         + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
                         + ".adi";
                 new Thread(new Runnable() {
@@ -148,7 +148,7 @@ public class ExportLogSheet extends Dialog {
     }
 
     private File generateTempAdi() {
-        File adi = GeneralVariables.writeToTempFile(getContext(), "FT8US-", ".adi", "");
+        File adi = GeneralVariables.writeToTempFile(getContext(), "FT8AF-", ".adi", "");
         if (adi == null) {
             ToastMessage.show("Could not create temp file");
             working = false;

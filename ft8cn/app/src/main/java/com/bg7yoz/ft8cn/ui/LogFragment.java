@@ -228,7 +228,7 @@ public class LogFragment extends Fragment {
             public void run() {
 
                 File adiFile = GeneralVariables.writeToTempFile(requireContext()
-                        , "FT8CN"
+                        , "FT8AF"
                         , ".txt"
                         , "");
 

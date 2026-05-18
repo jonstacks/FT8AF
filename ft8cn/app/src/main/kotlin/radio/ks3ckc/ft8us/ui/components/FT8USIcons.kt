@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Custom icon set for FT8US, drawn as stroked paths matching the design prototype.
+ * Custom icon set for FT8AF, drawn as stroked paths matching the design prototype.
  * All icons use a 24x24 coordinate space.
  */
 object FT8USIcons {
