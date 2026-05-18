@@ -1,4 +1,4 @@
-# NEXT-FT8CN
+# FT8AF
 
 **FT8 on Android — modernized.**
 
@@ -8,7 +8,7 @@ Run FT8 natively on your Android phone or tablet, drive your radio over USB CAT,
 
 ---
 
-## What's New in NEXT-FT8CN
+## What's New in FT8AF
 
 ### UI & UX
 - **Jetpack Compose UI** with a Material 3 dark theme
@@ -38,7 +38,7 @@ Run FT8 natively on your Android phone or tablet, drive your radio over USB CAT,
 
 ## Install
 
-Grab the latest APK from the [Releases](https://github.com/patrickrb/NEXT-FT8CN/releases) page, or build it yourself:
+Grab the latest APK from the [Releases](https://github.com/patrickrb/FT8AF/releases) page, or build it yourself:
 
 ```bash
 cd ft8cn
@@ -55,6 +55,10 @@ Massive thanks to **BG7YOZ**, the original author of FT8CN, and **N0BOY**, who h
 
 ## About this fork
 
-Most of the changes in NEXT-FT8CN were vibe coded on I-70 at 70 mph on the way to and from Hamvention. Laptop on the passenger seat, radio in the back, Claude in the loop. Some of the best debugging happens at highway speed.
+Most of the changes in FT8AF were vibe coded on I-70 at 70 mph on the way to and from Hamvention. Laptop on the passenger seat, radio in the back, Claude in the loop. Some of the best debugging happens at highway speed.
+
+Built by:
+- **Patrick Burns — [K1AF](https://www.qrz.com/db/K1AF)**
+- **Reid — [N0RC](https://www.qrz.com/db/N0RC)** (co-pilot, road-trip debugger, all-around enabler)
 
 73.

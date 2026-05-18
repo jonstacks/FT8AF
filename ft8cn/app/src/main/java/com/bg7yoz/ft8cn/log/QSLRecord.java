@@ -66,7 +66,7 @@ public class QSLRecord {
         receivedReport = -100;
         bandLength = BaseRigOperation.getMeterFromFreq(GeneralVariables.band);//Get wavelength
         bandFreq = GeneralVariables.band;
-        comment = "SWL By FT8CN";
+        comment = "SWL By FT8AF";
     }
 
     /**
@@ -107,8 +107,8 @@ public class QSLRecord {
             distance = MaidenheadGrid.getDistStrEN(myMaidenGrid, toMaidenGrid);
         }
         this.comment =
-                distance.equals("") ? "QSO by FT8CN"
-                        : String.format("Distance: %s, QSO by FT8CN", distance);
+                distance.equals("") ? "QSO by FT8AF"
+                        : String.format("Distance: %s, QSO by FT8AF", distance);
     }
 
     public void update(QSLRecord record) {

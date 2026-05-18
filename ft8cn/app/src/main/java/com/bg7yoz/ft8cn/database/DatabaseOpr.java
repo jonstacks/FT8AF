@@ -923,7 +923,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
     public String downQSLTable(Cursor cursor, boolean isSWL) {
         StringBuilder logStr = new StringBuilder();
 
-        logStr.append("FT8CN ADIF Export<eoh>\n");
+        logStr.append("FT8AF ADIF Export<eoh>\n");
         cursor.moveToPosition(-1);
         while (cursor.moveToNext()) {
             logStr.append(String.format("<call:%d>%s "

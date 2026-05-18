@@ -1,4 +1,4 @@
-# NEXT-FT8CN Project Instructions
+# FT8AF Project Instructions
 
 ## Build & Deploy
 

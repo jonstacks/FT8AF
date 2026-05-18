@@ -121,7 +121,7 @@ public class ShareLogs {
         int position = 0;
         try {
             fileOutputStream = new FileOutputStream(adiFile, true);
-            fileOutputStream.write("FT8CN ADIF Export<eoh>\n".getBytes());
+            fileOutputStream.write("FT8AF ADIF Export<eoh>\n".getBytes());
             cursor.moveToPosition(-1);
             while (cursor.moveToNext()) {
                 position++;
@@ -343,7 +343,7 @@ public class ShareLogs {
     }
 
     /**
-     * Copy {@code source} into the user's Downloads/FT8US directory.
+     * Copy {@code source} into the user's Downloads/FT8AF directory.
      * Returns the user-visible relative path on success, or null on failure.
      */
     public static String saveToDownloads(Context context, File source, String displayName) {
@@ -353,7 +353,7 @@ public class ShareLogs {
                 values.put(MediaStore.Downloads.DISPLAY_NAME, displayName);
                 values.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
                 values.put(MediaStore.Downloads.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/FT8US");
+                        Environment.DIRECTORY_DOWNLOADS + "/FT8AF");
                 Uri uri = context.getContentResolver().insert(
                         MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
                 if (uri == null) return null;
@@ -362,10 +362,10 @@ public class ShareLogs {
                 copyStream(is, os);
                 is.close();
                 if (os != null) os.close();
-                return "Download/FT8US/" + displayName;
+                return "Download/FT8AF/" + displayName;
             } else {
                 File downloads = new File(Environment.getExternalStoragePublicDirectory(
-                        Environment.DIRECTORY_DOWNLOADS), "FT8US");
+                        Environment.DIRECTORY_DOWNLOADS), "FT8AF");
                 if (!downloads.exists()) {
                     //noinspection ResultOfMethodCallIgnored
                     downloads.mkdirs();
@@ -376,7 +376,7 @@ public class ShareLogs {
                 copyStream(is, os);
                 is.close();
                 os.close();
-                return "Download/FT8US/" + displayName;
+                return "Download/FT8AF/" + displayName;
             }
         } catch (IOException e) {
             Log.e(TAG, "saveToDownloads failed: " + e.getMessage());

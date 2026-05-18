@@ -88,7 +88,7 @@
         app:layout_constraintEnd_toStartOf="@+id/image"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="@+id/image"
-        tools:text="FT8CN" />
+        tools:text="FT8AF" />
 
     <TextView
         android:id="@+id/buildVersionTextView"

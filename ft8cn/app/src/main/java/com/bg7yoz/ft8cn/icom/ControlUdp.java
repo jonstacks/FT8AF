@@ -14,7 +14,7 @@ import java.util.TimerTask;
 
 public class ControlUdp extends IcomUdpBase {
     private static final String TAG = "ControlUdp";
-    public final String APP_NAME = "FT8CN";
+    public final String APP_NAME = "FT8AF";
 
     //Related to sample rate: samples per 20ms = 12000/50 = 240 = 0xF0; actual byte count (16-bit) is doubled = 480 bytes
 

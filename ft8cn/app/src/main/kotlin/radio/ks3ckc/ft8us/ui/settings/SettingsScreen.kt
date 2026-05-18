@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -490,16 +491,7 @@ fun SettingsScreen(
 
     // -- About / FAQ Dialog --
     if (showAbout) {
-        InfoDialog(
-            title = "FT8US",
-            body = "Version ${GeneralVariables.VERSION}\n" +
-                "Build ${GeneralVariables.BUILD_DATE}\n\n" +
-                "Based on FT8CN by BG7YOZ\n\n" +
-                "FT8US is a standalone FT8 transceiver app for Android. " +
-                "It supports USB, Bluetooth, and network rig control " +
-                "with automatic sequencing and logging.",
-            onDismiss = { showAbout = false },
-        )
+        AboutDialog(onDismiss = { showAbout = false })
     }
 
     // -- Cloudlog Settings Dialog --
@@ -1583,6 +1575,75 @@ private fun InfoDialog(
                 color = TextMuted,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("OK", color = Accent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * About dialog with version info, credits, and tappable QRZ links for the authors.
+ */
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgSurface2)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "FT8AF",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+            )
+
+            Text(
+                text = "Version ${GeneralVariables.VERSION}\n" +
+                    "Build ${GeneralVariables.BUILD_DATE}\n\n" +
+                    "Based on FT8CN by BG7YOZ\n\n" +
+                    "FT8US is a standalone FT8 transceiver app for Android. " +
+                    "It supports USB, Bluetooth, and network rig control " +
+                    "with automatic sequencing and logging.",
+                color = TextMuted,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+            )
+
+            Text(
+                text = "Built by",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+            )
+            Text(
+                text = "K1AF — Patrick Burns (QRZ)",
+                color = Accent,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { uriHandler.openUri("https://www.qrz.com/db/K1AF") },
+            )
+            Text(
+                text = "N0RC — Reid (QRZ)",
+                color = Accent,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { uriHandler.openUri("https://www.qrz.com/db/N0RC") },
             )
 
             Row(
