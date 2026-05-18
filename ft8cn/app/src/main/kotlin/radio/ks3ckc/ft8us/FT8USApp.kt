@@ -1,13 +1,5 @@
 package radio.ks3ckc.ft8us
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,30 +70,21 @@ fun FT8USApp(mainViewModel: MainViewModel) {
         Column(
             modifier = Modifier.fillMaxSize(),
         ) {
-            // Main content area (takes remaining space)
+            // Main content area (takes remaining space).
+            // Note: AndroidView-wrapped legacy views (waterfall/columnar) interact badly with
+            // AnimatedContent's graphicsLayer translations during enter/exit, so tab switching
+            // here is a plain swap. The TabBar selection itself still animates.
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
             ) {
-                AnimatedContent(
-                    targetState = activeTab,
-                    transitionSpec = {
-                        val forward = targetState.ordinal > initialState.ordinal
-                        val dir = if (forward) 1 else -1
-                        (fadeIn(tween(240)) + slideInHorizontally(tween(240)) { fullWidth -> dir * fullWidth / 12 }) togetherWith
-                            (fadeOut(tween(120)) + slideOutHorizontally(tween(240)) { fullWidth -> -dir * fullWidth / 12 }) using
-                            SizeTransform(clip = false)
-                    },
-                    label = "tab-content",
-                ) { tab ->
-                    when (tab) {
-                        FT8USTab.DECODE -> DecodeScreen(mainViewModel)
-                        FT8USTab.MAP -> MapScreen(mainViewModel)
-                        FT8USTab.WATERFALL -> WaterfallScreen(mainViewModel)
-                        FT8USTab.LOG -> LogbookScreen(mainViewModel)
-                        FT8USTab.SETTINGS -> SettingsScreen(mainViewModel)
-                    }
+                when (activeTab) {
+                    FT8USTab.DECODE -> DecodeScreen(mainViewModel)
+                    FT8USTab.MAP -> MapScreen(mainViewModel)
+                    FT8USTab.WATERFALL -> WaterfallScreen(mainViewModel)
+                    FT8USTab.LOG -> LogbookScreen(mainViewModel)
+                    FT8USTab.SETTINGS -> SettingsScreen(mainViewModel)
                 }
             }
 
