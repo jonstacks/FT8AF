@@ -73,10 +73,15 @@ fun FT8USApp(mainViewModel: MainViewModel) {
         GeneralVariables.getBandString()
     }
     // Short pill label for the TxStrip frequency button — just the band (e.g. "20m").
-    // Derived from the current frequency so it's correct even before bandListIndex
-    // has been set (e.g. on first launch, when index is -1).
-    val frequencyLabel = (BaseRigOperation.getMeterFromFreq(GeneralVariables.band) ?: "")
-        .ifBlank { "—" }
+    // Looked up by frequency from bands.txt so the conventional band name is used
+    // (e.g. 40.68 MHz is "8m" by convention, not the computed wavelength). Falls
+    // back to the computed wavelength if the freq isn't in the band list.
+    val frequencyLabel = run {
+        val freq = GeneralVariables.band
+        OperationBand.bandList.firstOrNull { it.band == freq }?.waveLength
+            ?: BaseRigOperation.getMeterFromFreq(freq)
+            ?: ""
+    }.ifBlank { "—" }
     // Trim the band parenthetical and any marker prefix from the status label, since
     // the band is shown in the new pill on the right.
     val bandLabelTrimmed = bandLabel
