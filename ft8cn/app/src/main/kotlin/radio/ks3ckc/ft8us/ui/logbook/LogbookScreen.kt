@@ -316,6 +316,9 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
                                     cloudlogOk = result?.cloudlogOk ?: 0,
                                     qrzOk = result?.qrzOk ?: 0,
                                 )
+                                // Re-query QSLTable so the row chips pick up the
+                                // newly-set synced_cloudlog / synced_qrz flags.
+                                refreshKey++
                             }
                         },
                     ) {
@@ -1106,10 +1109,13 @@ private fun QsoRow(
     val state = UsStateLookup.stateFromGrid(context, grid)
     var menuOpen by remember { mutableStateOf(false) }
 
+    // Show a status pill only when something positive has happened (worked or
+    // LoTW-confirmed). New rows default to no badge — the chip area to the right
+    // is where the sync indicators live.
     val status = when {
         record.isLotW_QSL -> QsoStatus.CONFIRMED
         record.isQSL -> QsoStatus.WORKED
-        else -> QsoStatus.PENDING
+        else -> null
     }
 
     // Build the secondary line entries (state takes precedence over DXCC when present
@@ -1181,8 +1187,18 @@ private fun QsoRow(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Status pill
-            StatusPill(status = status, compact = true)
+            // Status pill — only shown when worked or LoTW-confirmed; brand-new QSOs
+            // get no badge to keep the row visually quiet.
+            if (status != null) {
+                StatusPill(status = status, compact = true)
+            }
+
+            // Sync-to-service indicator chips (independent of QSL state)
+            SyncChips(
+                cloudlog = record.syncedCloudlog,
+                qrz = record.syncedQrz,
+                cloudlogLabel = cloudlogFamilyLabel(GeneralVariables.cloudlogServerAddress),
+            )
 
             // Overflow action menu (edit / delete)
             Box {
@@ -1232,6 +1248,55 @@ private fun QsoRow(
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync-to-service chips ("CL" for Cloudlog/Wavelog/Nextlog, "QRZ" for QRZ)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun SyncChips(cloudlog: Boolean, qrz: Boolean, cloudlogLabel: String) {
+    if (!cloudlog && !qrz) return
+    Row(
+        modifier = Modifier.padding(start = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (cloudlog) SyncChip(label = cloudlogLabel)
+        if (qrz) SyncChip(label = "QRZ")
+    }
+}
+
+// Cloudlog, Wavelog, and Nextlog share an upload API but identify differently in
+// their hostnames. Pick the right short label from whatever the user configured.
+private fun cloudlogFamilyLabel(serverAddress: String?): String {
+    val host = serverAddress?.lowercase().orEmpty()
+    return when {
+        "wavelog" in host -> "WL"
+        "nextlog" in host -> "NL"
+        else -> "CL"
+    }
+}
+
+@Composable
+private fun SyncChip(label: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Signal.copy(alpha = 0.14f))
+            .border(1.dp, Signal.copy(alpha = 0.32f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "↑ $label",
+            color = Signal,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = GeistMonoFamily,
+            maxLines = 1,
+        )
     }
 }
 
