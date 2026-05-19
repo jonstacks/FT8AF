@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -103,8 +104,27 @@ fun ActiveQsoPanel(
     val displayCallsign = if (liveCallsign != "CQ" && liveCallsign.isNotEmpty()) liveCallsign else rememberedCallsign
     val hasTarget = displayCallsign != null
 
+    // Synthesized TX log: append the message we're currently transmitting
+    // the moment TX begins, so the operator sees it in the log without
+    // waiting for the loopback decode (15–30s) to catch up.
+    val synthTxLog = remember(displayCallsign) { mutableStateListOf<QsoLogEntry>() }
+    LaunchedEffect(isTransmitting, transmittingMessage, displayCallsign) {
+        val msg = transmittingMessage.orEmpty()
+        if (isTransmitting && msg.isNotEmpty() && displayCallsign != null) {
+            if (synthTxLog.none { it.messageText == msg }) {
+                synthTxLog.add(
+                    QsoLogEntry(
+                        direction = QsoLogEntry.Direction.TX,
+                        utcTime = System.currentTimeMillis(),
+                        messageText = msg,
+                    )
+                )
+            }
+        }
+    }
+
     // Filter messages to/from the target station
-    val qsoMessages: List<QsoLogEntry> = remember(messageList, messageList?.size, displayCallsign, transmittingMessage) {
+    val qsoMessages: List<QsoLogEntry> = remember(messageList, messageList?.size, displayCallsign, transmittingMessage, synthTxLog.size) {
         if (!hasTarget || displayCallsign == null) return@remember emptyList()
 
         val entries = mutableListOf<QsoLogEntry>()
@@ -140,6 +160,14 @@ fun ActiveQsoPanel(
                 }
             }
         }
+
+        // Add synthesized TX entries (skip duplicates already present from decode loopback).
+        synthTxLog.forEach { synth ->
+            if (entries.none { it.messageText == synth.messageText && it.direction == QsoLogEntry.Direction.TX }) {
+                entries.add(synth)
+            }
+        }
+
         entries.sortedBy { it.utcTime }
     }
 
