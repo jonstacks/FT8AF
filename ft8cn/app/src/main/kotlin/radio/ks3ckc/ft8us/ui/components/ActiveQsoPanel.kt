@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -71,10 +72,12 @@ fun ActiveQsoPanel(
     mainViewModel: MainViewModel,
     expanded: Boolean,
     onCollapse: () -> Unit = {},
+    onReopenSheet: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val toCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
     val isActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
+    val isTransmitting by mainViewModel.ft8TransmitSignal.mutableIsTransmitting.observeAsState(false)
     val functions by mainViewModel.ft8TransmitSignal.mutableFunctions.observeAsState(arrayListOf())
     val functionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
     val messageList by mainViewModel.mutableFt8MessageList.observeAsState(arrayListOf())
@@ -101,8 +104,27 @@ fun ActiveQsoPanel(
     val displayCallsign = if (liveCallsign != "CQ" && liveCallsign.isNotEmpty()) liveCallsign else rememberedCallsign
     val hasTarget = displayCallsign != null
 
+    // Synthesized TX log: append the message we're currently transmitting
+    // the moment TX begins, so the operator sees it in the log without
+    // waiting for the loopback decode (15–30s) to catch up.
+    val synthTxLog = remember(displayCallsign) { mutableStateListOf<QsoLogEntry>() }
+    LaunchedEffect(isTransmitting, transmittingMessage, displayCallsign) {
+        val msg = transmittingMessage.orEmpty()
+        if (isTransmitting && msg.isNotEmpty() && displayCallsign != null) {
+            if (synthTxLog.none { it.messageText == msg }) {
+                synthTxLog.add(
+                    QsoLogEntry(
+                        direction = QsoLogEntry.Direction.TX,
+                        utcTime = System.currentTimeMillis(),
+                        messageText = msg,
+                    )
+                )
+            }
+        }
+    }
+
     // Filter messages to/from the target station
-    val qsoMessages: List<QsoLogEntry> = remember(messageList, messageList?.size, displayCallsign, transmittingMessage) {
+    val qsoMessages: List<QsoLogEntry> = remember(messageList, messageList?.size, displayCallsign, transmittingMessage, synthTxLog.size) {
         if (!hasTarget || displayCallsign == null) return@remember emptyList()
 
         val entries = mutableListOf<QsoLogEntry>()
@@ -138,6 +160,14 @@ fun ActiveQsoPanel(
                 }
             }
         }
+
+        // Add synthesized TX entries (skip duplicates already present from decode loopback).
+        synthTxLog.forEach { synth ->
+            if (entries.none { it.messageText == synth.messageText && it.direction == QsoLogEntry.Direction.TX }) {
+                entries.add(synth)
+            }
+        }
+
         entries.sortedBy { it.utcTime }
     }
 
@@ -161,16 +191,26 @@ fun ActiveQsoPanel(
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            // Station header
+            // Station header. When a sheet exists but the user has
+            // minimized it, the header acts as the "reopen" affordance.
             StationHeader(
-                targetCallsign = displayCallsign ?: "Searching...",
+                targetCallsign = when {
+                    displayCallsign == null -> "Searching..."
+                    isTransmitting -> "QSOing with $displayCallsign"
+                    else -> "Waiting for $displayCallsign"
+                },
                 snr = if (displayCallsign != null) toCallsign?.snr else null,
+                onClick = if (displayCallsign != null) onReopenSheet else null,
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
             // Message log
-            MessageLog(entries = qsoMessages)
+            MessageLog(
+                entries = qsoMessages,
+                transmittingMessage = transmittingMessage.orEmpty(),
+                isTransmitting = isTransmitting,
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -191,9 +231,12 @@ fun ActiveQsoPanel(
 }
 
 @Composable
-private fun StationHeader(targetCallsign: String, snr: Int?) {
+private fun StationHeader(targetCallsign: String, snr: Int?, onClick: (() -> Unit)? = null) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -225,11 +268,24 @@ private fun StationHeader(targetCallsign: String, snr: Int?) {
                 )
             }
         }
+        if (onClick != null) {
+            Text(
+                text = "tap to view ↗",
+                color = Accent,
+                fontSize = 10.sp,
+                fontFamily = GeistMonoFamily,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
 @Composable
-private fun MessageLog(entries: List<QsoLogEntry>) {
+private fun MessageLog(
+    entries: List<QsoLogEntry>,
+    transmittingMessage: String,
+    isTransmitting: Boolean,
+) {
     val listState = rememberLazyListState()
 
     // Auto-scroll to bottom when new entries arrive
@@ -240,6 +296,11 @@ private fun MessageLog(entries: List<QsoLogEntry>) {
     }
 
     if (entries.isEmpty()) {
+        val placeholder = if (isTransmitting && transmittingMessage.isNotEmpty()) {
+            "TX: $transmittingMessage"
+        } else {
+            "Waiting for messages..."
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -247,8 +308,8 @@ private fun MessageLog(entries: List<QsoLogEntry>) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "Waiting for messages...",
-                color = TextFaint,
+                text = placeholder,
+                color = if (isTransmitting && transmittingMessage.isNotEmpty()) Accent else TextFaint,
                 fontSize = 11.sp,
                 fontFamily = GeistMonoFamily,
             )

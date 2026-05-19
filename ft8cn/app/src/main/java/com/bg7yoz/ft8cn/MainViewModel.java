@@ -174,6 +174,12 @@ public class MainViewModel extends ViewModel {
     public MutableLiveData<Integer> mutableShareCount=new MutableLiveData<>(0);//total shared count
     public MutableLiveData<Boolean> mutableImportShareRunning=new MutableLiveData<>(false);//whether importing shared data
 
+    // QSO bottom-sheet persistence (Compose UI). The callsign the sheet is
+    // currently bound to (null = no sheet) and whether the user has
+    // minimized it (slid down). Lives in the ViewModel so the sheet stays
+    // open across navigation away from Decode and back.
+    public MutableLiveData<String> qsoSheetCallsign = new MutableLiveData<>(null);
+    public MutableLiveData<Boolean> qsoSheetMinimized = new MutableLiveData<>(false);
 
 
     public HamRecorder hamRecorder;//recording object

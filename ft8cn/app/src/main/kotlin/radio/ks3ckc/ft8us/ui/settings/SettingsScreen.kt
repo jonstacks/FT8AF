@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -129,6 +130,9 @@ fun SettingsScreen(
     var showLateStart by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showCloudlog by remember { mutableStateOf(false) }
+    var showQrzCreds by remember { mutableStateOf(false) }
+    var qrzXmlUser by remember { mutableStateOf(GeneralVariables.qrzXmlUsername.orEmpty()) }
+    var qrzXmlPass by remember { mutableStateOf(GeneralVariables.qrzXmlPassword.orEmpty()) }
     var showRigModelPicker by remember { mutableStateOf(false) }
     var showControlModePicker by remember { mutableStateOf(false) }
     var showAudioInputPicker by remember { mutableStateOf(false) }
@@ -492,6 +496,28 @@ fun SettingsScreen(
     // -- About / FAQ Dialog --
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
+    }
+
+    // -- QRZ Credentials Dialog --
+    if (showQrzCreds) {
+        QrzCredsDialog(
+            initialUsername = qrzXmlUser,
+            initialPassword = qrzXmlPass,
+            onDismiss = { showQrzCreds = false },
+            onSave = { user, pass ->
+                qrzXmlUser = user
+                qrzXmlPass = pass
+                GeneralVariables.qrzXmlUsername = user
+                GeneralVariables.qrzXmlPassword = pass
+                mainViewModel.databaseOpr.writeConfig("qrzXmlUsername", user, null)
+                mainViewModel.databaseOpr.writeConfig("qrzXmlPassword", pass, null)
+                // Drop cached lookups so retries don't return stale nulls
+                // from earlier failed attempts.
+                radio.ks3ckc.ft8us.qrz.QrzXmlClient.clearCache()
+                radio.ks3ckc.ft8us.qrz.QrzWebClient.clearCache()
+                showQrzCreds = false
+            },
+        )
     }
 
     // -- Cloudlog Settings Dialog --
@@ -949,6 +975,18 @@ fun SettingsScreen(
                         )
                         SectionDivider()
                         SettingsRow(
+                            label = "QRZ Profile Lookup",
+                            description = "Username + password for QRZ XML API (avatars)",
+                            value = if (qrzXmlUser.isNotEmpty() && qrzXmlPass.isNotEmpty()) {
+                                qrzXmlUser
+                            } else {
+                                "Not configured"
+                            },
+                            showChevron = true,
+                            onClick = { showQrzCreds = true },
+                        )
+                        SectionDivider()
+                        SettingsRow(
                             label = "Cloudlog / Wavelog / Nextlog",
                             description = "Auto-upload QSOs to a Cloudlog, Wavelog, or Nextlog instance",
                             value = cloudlogAddress.ifEmpty { "Not configured" },
@@ -1314,6 +1352,141 @@ private fun CloudlogSettingsDialog(
                             apiKeyInput.text.trim(),
                             stationIdInput.text.trim(),
                         )
+                    },
+                ) {
+                    Text("Save", color = Accent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QrzCredsDialog(
+    initialUsername: String,
+    initialPassword: String,
+    onDismiss: () -> Unit,
+    onSave: (username: String, password: String) -> Unit,
+) {
+    var userInput by remember { mutableStateOf(TextFieldValue(initialUsername)) }
+    var passInput by remember { mutableStateOf(TextFieldValue(initialPassword)) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var isTesting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        cursorColor = Accent,
+        focusedBorderColor = Accent,
+        unfocusedBorderColor = BorderStrong,
+        focusedLabelColor = Accent,
+        unfocusedLabelColor = TextMuted,
+    )
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgSurface2)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = "QRZ Profile Lookup",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+            )
+            Text(
+                text = "Used to fetch profile photos for decoded callsigns via the QRZ XML API. Requires a QRZ XML subscription.",
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+
+            OutlinedTextField(
+                value = userInput,
+                onValueChange = { userInput = it; testResult = null },
+                label = { Text("Username") },
+                placeholder = { Text("Your QRZ.com username", color = TextFaint) },
+                singleLine = true,
+                colors = fieldColors,
+                textStyle = TextStyle(fontSize = 14.sp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = passInput,
+                onValueChange = { passInput = it; testResult = null },
+                label = { Text("Password") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                colors = fieldColors,
+                textStyle = TextStyle(fontSize = 14.sp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            // Test Connection
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(
+                    onClick = {
+                        GeneralVariables.qrzXmlUsername = userInput.text.trim()
+                        GeneralVariables.qrzXmlPassword = passInput.text
+                        isTesting = true
+                        testResult = null
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                radio.ks3ckc.ft8us.qrz.QrzXmlClient.testConnection()
+                            }
+                            testResult = result
+                            isTesting = false
+                        }
+                    },
+                    enabled = !isTesting,
+                ) {
+                    Text(
+                        text = "Test Connection",
+                        color = if (isTesting) TextFaint else Accent,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (isTesting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .width(16.dp)
+                            .height(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Accent,
+                    )
+                }
+                if (testResult != null) {
+                    val ok = testResult == "OK"
+                    Text(
+                        text = if (ok) "Pass" else testResult!!,
+                        color = if (ok) StatusConfirmed else StatusBad,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = TextMuted)
+                }
+                TextButton(
+                    onClick = {
+                        onSave(userInput.text.trim(), passInput.text)
                     },
                 ) {
                     Text("Save", color = Accent, fontWeight = FontWeight.SemiBold)

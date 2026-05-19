@@ -148,6 +148,15 @@ private fun QsoSheetContent(
             isTransmitting = isTransmitting,
         )
 
+        // -- Live QSO status (contextual: TX'ing call / waiting for reply) --
+        QsoLiveStatusRow(
+            callsign = callsign,
+            message = message,
+            isLiveQso = liveQsoIsThisCallsign,
+            isTransmitting = isTransmitting,
+            liveFunctionOrder = txFunctionOrder ?: 6,
+        )
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // -- Call button --
@@ -181,8 +190,17 @@ private fun QsoSheetContent(
             Button(
                 onClick = {
                     mainViewModel.addFollowCallsign(callsign)
-                    GeneralVariables.transmitMessages.add(message)
-                    mainViewModel.ft8TransmitSignal.setActivated(true)
+                    if (!mainViewModel.ft8TransmitSignal.isActivated) {
+                        mainViewModel.ft8TransmitSignal.setActivated(true)
+                        GeneralVariables.transmitMessages.add(message)
+                        GeneralVariables.resetLaunchSupervision()
+                    }
+                    mainViewModel.ft8TransmitSignal.setTransmit(
+                        message.fromCallTransmitCallsign,
+                        1,
+                        message.extraInfo,
+                    )
+                    mainViewModel.ft8TransmitSignal.transmitNow()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -225,22 +243,12 @@ private fun StationHeader(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Callsign avatar circle
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(BgElev),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = callsign.take(2),
-                color = Accent,
-                fontFamily = GeistMonoFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-        }
+        // Callsign avatar circle (QRZ profile image with initials fallback)
+        QrzAvatar(
+            callsign = callsign,
+            size = 48.dp,
+            fallbackText = callsign.take(2),
+        )
 
         Spacer(modifier = Modifier.width(14.dp))
 
@@ -411,6 +419,75 @@ private fun StatCard(
 // QSO Sequence Visualizer
 // ---------------------------------------------------------------------------
 
+private val QsoStepLabels = listOf("call", "report", "roger", "confirm", "73")
+
+/**
+ * Resolve which step (0..4) the QSO is currently on, or -1 for "not started".
+ * Shared by the visualizer and the live status row so they cannot diverge.
+ *
+ * Just-viewing (no active QSO) always returns -1 so the sequence stays
+ * grayed out until the operator commits via the Call button. Step state
+ * only lights up for a live QSO with this callsign or for a previously
+ * worked-and-confirmed call (which lights all 5 as complete).
+ */
+private fun computeCurrentStepIndex(
+    message: Ft8Message,
+    isLiveQso: Boolean,
+    liveFunctionOrder: Int,
+): Int {
+    val isFullyComplete = message.isQSL_Callsign && !isLiveQso
+    return when {
+        isFullyComplete -> 5
+        isLiveQso -> when (liveFunctionOrder) {
+            1 -> 0
+            2 -> 1
+            3 -> 2
+            4 -> 3
+            5 -> 4
+            else -> -1
+        }
+        else -> -1
+    }
+}
+
+@Composable
+private fun QsoLiveStatusRow(
+    callsign: String,
+    message: Ft8Message,
+    isLiveQso: Boolean,
+    isTransmitting: Boolean,
+    liveFunctionOrder: Int,
+) {
+    val text = when {
+        isLiveQso && isTransmitting -> {
+            val idx = computeCurrentStepIndex(message, true, liveFunctionOrder)
+            val stepLabel = QsoStepLabels.getOrNull(idx) ?: "message"
+            "QSOing with $callsign — Sending $stepLabel"
+        }
+        isLiveQso && !isTransmitting -> "Waiting for $callsign to reply…"
+        !isLiveQso && isTransmitting -> "Transmitting…"
+        else -> null
+    } ?: return
+
+    Spacer(modifier = Modifier.height(8.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(BgElev)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = text,
+            color = Accent,
+            fontFamily = GeistMonoFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+        )
+    }
+}
+
 private data class QsoStep(
     val label: String,
     val txRxLabel: String,
@@ -456,26 +533,7 @@ private fun QsoSequenceVisualizer(
         ),
     )
 
-    // Determine current step (0-based index, or -1 for "not started"). For a live
-    // QSO we use the operator's transmit function order; otherwise fall back to
-    // historical message state or the worked/confirmed flag.
-    val historicalFunOrder = GeneralVariables.checkFunOrder(message)
-    val isFullyComplete = message.isQSL_Callsign && !isLiveQso
-
-    val currentStepIndex = when {
-        isFullyComplete -> 5  // QSO complete -> all 5 done
-        isLiveQso -> when (liveFunctionOrder) {
-            1 -> 0   // sending grid call
-            2 -> 1   // they replied with grid, we're sending report
-            3 -> 2   // they sent report, we're sending R-report
-            4 -> 3   // they sent R-report, we're sending RR73
-            5 -> 4   // we're sending 73 -> all logged
-            else -> -1
-        }
-        historicalFunOrder == 5 -> 5
-        historicalFunOrder in 1..4 -> historicalFunOrder
-        else -> -1
-    }
+    val currentStepIndex = computeCurrentStepIndex(message, isLiveQso, liveFunctionOrder)
 
     Column(
         modifier = Modifier.fillMaxWidth(),
