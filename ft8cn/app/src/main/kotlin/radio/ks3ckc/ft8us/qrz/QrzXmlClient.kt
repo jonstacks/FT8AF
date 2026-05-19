@@ -1,6 +1,7 @@
 package radio.ks3ckc.ft8us.qrz
 
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.bg7yoz.ft8cn.GeneralVariables
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -33,9 +34,13 @@ import java.util.Locale
  */
 object QrzXmlClient {
     private const val TAG = "QrzXmlClient"
-    private const val BASE_URL = "https://xmldata.qrz.com/xml/current/"
+    private const val DEFAULT_BASE_URL = "https://xmldata.qrz.com/xml/current/"
     private const val AGENT = "ft8af-1.0"
     private const val CACHE_MAX = 200
+
+    @VisibleForTesting
+    @JvmField
+    internal var baseUrl: String = DEFAULT_BASE_URL
 
     private val sessionMutex = Mutex()
     @Volatile private var sessionKey: String? = null
@@ -163,7 +168,7 @@ object QrzXmlClient {
     private fun fetch(query: String): String? {
         var conn: HttpURLConnection? = null
         return try {
-            val url = URL("$BASE_URL?$query")
+            val url = URL("$baseUrl?$query")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 8000
@@ -184,7 +189,8 @@ object QrzXmlClient {
         }
     }
 
-    private fun parseTag(xml: String, tagName: String): String? {
+    @VisibleForTesting
+    internal fun parseTag(xml: String, tagName: String): String? {
         return try {
             val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
                 setInput(xml.reader())
@@ -201,6 +207,14 @@ object QrzXmlClient {
         } catch (_: Exception) {
             null
         }
+    }
+
+    @VisibleForTesting
+    internal fun resetForTests() {
+        sessionKey = null
+        cache.clear()
+        lastError = null
+        baseUrl = DEFAULT_BASE_URL
     }
 
     private fun urlEncode(s: String): String =

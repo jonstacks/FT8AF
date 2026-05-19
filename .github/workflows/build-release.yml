@@ -72,6 +72,19 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
 
+      - name: Run unit tests
+        working-directory: ft8cn
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            ft8cn/app/build/reports/tests/
+            ft8cn/app/build/test-results/
+
       - name: Build APK
         working-directory: ft8cn
         run: ./gradlew assembleRelease

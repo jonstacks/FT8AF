@@ -33,7 +33,15 @@ public class GenerateFT8 {
 
 
     static {
-        System.loadLibrary("ft8cn");
+        try {
+            System.loadLibrary("ft8cn");
+        } catch (UnsatisfiedLinkError e) {
+            // Best-effort load: JVM unit tests don't have libft8cn.so on
+            // java.library.path. The native methods themselves will throw if
+            // actually invoked without the library; the pure-Java helpers on
+            // this class stay available either way.
+            Log.w(TAG, "ft8cn native library not loaded: " + e.getMessage());
+        }
     }
 
 
