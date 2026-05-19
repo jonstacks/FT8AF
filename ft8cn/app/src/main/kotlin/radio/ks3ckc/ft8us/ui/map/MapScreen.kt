@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
@@ -55,7 +56,9 @@ import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import radio.ks3ckc.ft8us.pskreporter.PskReporterClient
 import radio.ks3ckc.ft8us.theme.*
 import radio.ks3ckc.ft8us.ui.components.GlassCard
 import radio.ks3ckc.ft8us.ui.components.TopBar
@@ -82,6 +85,19 @@ private data class StationMarker(
     val color: Color,
     val message: Ft8Message,
 )
+
+// PSK Reporter overlay (issue #33) — a receiver that has decoded the operator's signal.
+private data class PskSpotMarker(
+    val receiverCallsign: String,
+    val grid: String,
+    val lat: Double,
+    val lon: Double,
+    val snr: Int,
+    val frequencyHz: Long,
+)
+
+private const val PSK_OVERLAY_SECONDS_BACK = 3600
+private const val PSK_POLL_INTERVAL_MS = 5L * 60L * 1000L
 
 private data class ProjectedPoint(
     val x: Float,
@@ -157,6 +173,41 @@ fun MapScreen(mainViewModel: MainViewModel) {
 
     var selectedCallsign by remember { mutableStateOf<String?>(null) }
     var viewMode by rememberSaveable { mutableStateOf(MapViewMode.STANDARD) }
+    var pskOverlayEnabled by rememberSaveable { mutableStateOf(GeneralVariables.pskOverlayEnabled) }
+    var pskSpots by remember { mutableStateOf<List<PskSpotMarker>>(emptyList()) }
+
+    // PSK Reporter polling — fires immediately on enter and every 5 min while enabled.
+    // Re-reads myCallsign each cycle so a mid-session change is picked up on the next tick.
+    // Structured concurrency cancels the loop when MapScreen leaves composition.
+    LaunchedEffect(pskOverlayEnabled) {
+        if (!pskOverlayEnabled) {
+            pskSpots = emptyList()
+            return@LaunchedEffect
+        }
+        while (true) {
+            val call = GeneralVariables.myCallsign.trim().uppercase()
+            if (call.isEmpty()) {
+                pskSpots = emptyList()
+            } else {
+                val spots = PskReporterClient.fetchSpotsForMe(call, PSK_OVERLAY_SECONDS_BACK)
+                if (spots != null) {
+                    pskSpots = spots.map {
+                        PskSpotMarker(
+                            receiverCallsign = it.receiverCallsign,
+                            grid = it.receiverGrid,
+                            lat = it.receiverLat,
+                            lon = it.receiverLon,
+                            snr = it.snr,
+                            frequencyHz = it.frequencyHz,
+                        )
+                    }
+                }
+                // On null (failure / cooldown / rate-limit) keep prior spots so the overlay
+                // doesn't flicker; PskReporterClient logs the reason to debug.log.
+            }
+            delay(PSK_POLL_INTERVAL_MS)
+        }
+    }
 
     // Derive operator lat/lon from grid
     val opLatLng = remember(myGrid) {
@@ -229,6 +280,19 @@ fun MapScreen(mainViewModel: MainViewModel) {
                 )
             },
             actions = {
+                PskOverlayToggle(
+                    enabled = pskOverlayEnabled,
+                    onToggle = { newVal ->
+                        pskOverlayEnabled = newVal
+                        GeneralVariables.pskOverlayEnabled = newVal
+                        mainViewModel.databaseOpr.writeConfig(
+                            "pskOverlayEnabled",
+                            if (newVal) "1" else "0",
+                            null,
+                        )
+                    },
+                )
+                Spacer(modifier = Modifier.width(6.dp))
                 MapViewToggle(
                     mode = viewMode,
                     onModeChange = { viewMode = it },
@@ -261,6 +325,7 @@ fun MapScreen(mainViewModel: MainViewModel) {
                     opLat = opLat,
                     opLon = opLon,
                     stations = stations,
+                    pskSpots = pskSpots,
                     selectedCallsign = selectedCallsign,
                     onStationSelected = { selectedCallsign = it },
                     modifier = Modifier
@@ -271,6 +336,7 @@ fun MapScreen(mainViewModel: MainViewModel) {
                     opLat = opLat,
                     opLon = opLon,
                     stations = stations,
+                    pskSpots = pskSpots,
                     selectedCallsign = selectedCallsign,
                     onStationSelected = { selectedCallsign = it },
                     modifier = Modifier
@@ -302,7 +368,11 @@ fun MapScreen(mainViewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "${stations.size} stations",
+                text = if (pskOverlayEnabled) {
+                    "${stations.size} stations · ${pskSpots.size} heard"
+                } else {
+                    "${stations.size} stations"
+                },
                 color = TextMuted,
                 fontSize = 10.5.sp,
             )
@@ -344,6 +414,26 @@ private fun MapViewToggle(
 }
 
 @Composable
+private fun PskOverlayToggle(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (enabled) PskSpot else BgSurface3)
+            .clickable { onToggle(!enabled) }
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "PSK",
+            color = if (enabled) BgApp else TextMuted,
+            fontFamily = GeistMonoFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
 private fun TogglePill(
     label: String,
     active: Boolean,
@@ -376,6 +466,7 @@ private fun AzimuthalMapCanvas(
     opLat: Double,
     opLon: Double,
     stations: List<StationMarker>,
+    pskSpots: List<PskSpotMarker>,
     selectedCallsign: String?,
     onStationSelected: (String?) -> Unit,
     modifier: Modifier = Modifier,
@@ -425,6 +516,45 @@ private fun AzimuthalMapCanvas(
             radius = 4f,
             center = Offset(cx, cy),
         )
+
+        // PSK Reporter spots — drawn before stations so decoded markers layer on top.
+        // Square shape distinguishes them from circular station markers.
+        for (spot in pskSpots) {
+            val proj = azProject(opLat, opLon, spot.lat, spot.lon)
+            val sx = cx + proj.x * r
+            val sy = cy + proj.y * r
+            val dx = sx - cx
+            val dy = sy - cy
+            if (sqrt(dx * dx + dy * dy) > r) continue
+
+            val half = 2.5f
+            drawRect(
+                color = PskSpot.copy(alpha = 0.7f),
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+            )
+            drawRect(
+                color = BgApp,
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+                style = Stroke(width = 0.8f),
+            )
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.argb(160, 248, 113, 113)
+                textSize = 14f
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.NORMAL,
+                )
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                spot.receiverCallsign,
+                sx + 5f,
+                sy + paint.textSize / 3f,
+                paint,
+            )
+        }
 
         // Station markers
         for ((index, station) in stations.withIndex()) {
@@ -524,6 +654,7 @@ private fun StandardMapCanvas(
     opLat: Double,
     opLon: Double,
     stations: List<StationMarker>,
+    pskSpots: List<PskSpotMarker>,
     selectedCallsign: String?,
     onStationSelected: (String?) -> Unit,
     modifier: Modifier = Modifier,
@@ -573,6 +704,41 @@ private fun StandardMapCanvas(
             radius = 4f,
             center = Offset(opX, opY),
         )
+
+        // PSK Reporter spots — drawn before stations so decoded markers layer on top.
+        for (spot in pskSpots) {
+            val proj = equirectProject(spot.lat, spot.lon)
+            val sx = halfW + proj.x * halfW
+            val sy = halfH + proj.y * halfH
+
+            val half = 2.5f
+            drawRect(
+                color = PskSpot.copy(alpha = 0.7f),
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+            )
+            drawRect(
+                color = BgApp,
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+                style = Stroke(width = 0.8f),
+            )
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.argb(160, 248, 113, 113)
+                textSize = 14f
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.NORMAL,
+                )
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                spot.receiverCallsign,
+                sx + 5f,
+                sy + paint.textSize / 3f,
+                paint,
+            )
+        }
 
         // Station markers
         for ((index, station) in stations.withIndex()) {

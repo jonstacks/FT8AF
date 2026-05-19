@@ -2300,6 +2300,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("qrzXmlPassword")) {
                     GeneralVariables.qrzXmlPassword = result;
                 }
+                if (name.equalsIgnoreCase("pskOverlayEnabled")) {
+                    GeneralVariables.pskOverlayEnabled = result.equals("1");
+                }
 
                 if (name.equalsIgnoreCase("swrSwitch")) {
                     GeneralVariables.swr_switch_on = result.equals("1");
