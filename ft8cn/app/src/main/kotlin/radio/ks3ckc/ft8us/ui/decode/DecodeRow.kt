@@ -27,10 +27,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.bg7yoz.ft8cn.Ft8Message
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
-import com.bg7yoz.ft8cn.timer.UtcTimer
 import radio.ks3ckc.ft8us.theme.*
 import radio.ks3ckc.ft8us.ui.components.QsoStatus
 import radio.ks3ckc.ft8us.ui.components.SignalBar
@@ -60,6 +60,7 @@ fun DecodeRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     animateEntry: Boolean = false,
+    nowMillis: Long = 0L,
 ) {
     val isCQ = message.checkIsCQ()
     val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
@@ -185,13 +186,19 @@ fun DecodeRow(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // UTC time
-                MetaText(UtcTimer.getTimeHHMMSS(message.utcTime))
+                // Relative "ago" time
+                val agoText = if (nowMillis > 0L) {
+                    formatTimeAgo(message.utcTime, nowMillis)
+                } else ""
+                if (agoText.isNotEmpty()) {
+                    MetaText(agoText)
+                }
             }
 
-            // DX entity location line for CQ messages
-            val location = message.fromWhere
-            if (isCQ && !location.isNullOrEmpty()) {
+            // State / DX entity location line (shown on every row when known)
+            val context = LocalContext.current
+            val locationText = resolveLocationText(context, message)
+            if (!locationText.isNullOrEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -202,7 +209,7 @@ fun DecodeRow(
                         size = 12.dp,
                     )
                     Text(
-                        text = location,
+                        text = locationText,
                         color = TextDim,
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium,
@@ -210,6 +217,34 @@ fun DecodeRow(
                 }
             }
         }
+    }
+}
+
+private fun formatTimeAgo(utcMillis: Long, nowMillis: Long): String {
+    val diff = ((nowMillis - utcMillis) / 1000L).coerceAtLeast(0)
+    return when {
+        diff < 5 -> "now"
+        diff < 60 -> "${diff}s ago"
+        diff < 3600 -> "${diff / 60}m ago"
+        diff < 86400 -> "${diff / 3600}h ago"
+        else -> "${diff / 86400}d ago"
+    }
+}
+
+private fun resolveLocationText(
+    context: android.content.Context,
+    message: Ft8Message,
+): String? {
+    val country = message.fromWhere?.trim()
+    val state = UsStateLookup.stateFromGrid(context, message.maidenGrid)
+    val isUs = country?.contains("United States", ignoreCase = true) == true
+    return when {
+        state != null && (isUs || country.isNullOrEmpty()) -> "$state, USA"
+        state != null -> "$state, $country"
+        country.isNullOrEmpty() -> null
+        country == "United States of America" -> "USA"
+        country == "United Kingdom" -> "UK"
+        else -> country
     }
 }
 

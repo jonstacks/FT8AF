@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -144,9 +145,19 @@ fun DecodeScreen(
                         key = { index, msg -> "${msg.utcTime}_${msg.callsignFrom}_${msg.freq_hz}_$index" },
                     ) { index, message ->
                         val rowKey = "${message.utcTime}_${message.callsignFrom}_${message.freq_hz}_$index"
+
+                        // Group messages by FT8 cycle (15s slots). Draw a labeled
+                        // divider whenever we cross into a new slot.
+                        val prevSlot = if (index > 0) filteredMessages[index - 1].utcTime / 15000L else null
+                        val thisSlot = message.utcTime / 15000L
+                        if (prevSlot == null || prevSlot != thisSlot) {
+                            TimeGroupDivider(utcTime = message.utcTime)
+                        }
+
                         DecodeRow(
                             message = message,
                             animateEntry = rowKey in newKeys,
+                            nowMillis = utcTime,
                             onClick = {
                                 selectedMessage = message
                                 sheetVisible = true
@@ -163,6 +174,43 @@ fun DecodeScreen(
             mainViewModel = mainViewModel,
             visible = sheetVisible,
             onDismiss = { sheetVisible = false },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Time Group Divider
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun TimeGroupDivider(utcTime: Long) {
+    val timeStr = remember(utcTime) { UtcTimer.getTimeHHMMSS(utcTime) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(Border),
+        )
+        Text(
+            text = "$timeStr UTC",
+            color = TextFaint,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = GeistMonoFamily,
+            letterSpacing = 0.08.sp,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(Border),
         )
     }
 }

@@ -130,23 +130,40 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
     val context = LocalContext.current
     var activeTab by remember { mutableStateOf(LogbookTab.STATS) }
 
-    // Async-loaded stats
+    // Async-loaded state
     var stats by remember { mutableStateOf(LogbookStats()) }
+    var records by remember { mutableStateOf<List<QSLCallsignRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    // Load stats from database
+    // Load records and stats from the database on first mount.
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             try {
-                val db = mainViewModel.databaseOpr?.db ?: run {
+                val opr = mainViewModel.databaseOpr
+                val db = opr?.db
+                if (opr == null || db == null) {
                     isLoading = false
                     return@withContext
                 }
 
-                // Total QSOs
+                // QSO records — pull all rows, no filter
+                val loaded = suspendCancellableCoroutine<List<QSLCallsignRecord>> { cont ->
+                    opr.getQSLCallsignsByCallsign(true, 0, "", 0) { result ->
+                        cont.resume(result?.toList() ?: emptyList())
+                    }
+                }
+                records = loaded
+                // Mirror into the legacy ViewModel field so other (Java) screens stay in sync.
+                mainViewModel.callsignRecords?.let {
+                    it.clear()
+                    it.addAll(loaded)
+                }
+
+                // Total QSOs (single-fire callback)
                 val totalInfo = suspendCancellableCoroutine { cont ->
+                    val resumed = AtomicBoolean(false)
                     CountDbOpr.getQSLTotal(db) { info ->
-                        cont.resume(info)
+                        if (resumed.compareAndSet(false, true)) cont.resume(info)
                     }
                 }
                 val totalQsos = totalInfo?.values?.sumOf { it.value } ?: 0
@@ -178,10 +195,11 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
                 }
                 val ituCount = ituInfo?.values?.size ?: 0
 
-                // Band counts
+                // Band counts (single-fire callback)
                 val bandInfo = suspendCancellableCoroutine { cont ->
+                    val resumed = AtomicBoolean(false)
                     CountDbOpr.getBandCount(db) { info ->
-                        cont.resume(info)
+                        if (resumed.compareAndSet(false, true)) cont.resume(info)
                     }
                 }
                 val bandCounts = bandInfo?.values?.map { (it.name ?: "") to it.value }
@@ -195,15 +213,10 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
                     bandCounts = bandCounts,
                 )
             } catch (_: Exception) {
-                // Keep placeholder stats on error
+                // Leave records/stats at defaults on error
             }
             isLoading = false
         }
-    }
-
-    // QSO records from ViewModel
-    val records: List<QSLCallsignRecord> = remember(mainViewModel.callsignRecords) {
-        mainViewModel.callsignRecords?.toList() ?: emptyList()
     }
 
     Column(
@@ -758,20 +771,30 @@ private fun SignalSparkline(
     modifier: Modifier = Modifier,
     progress: Float = 1f,
 ) {
-    // Extract SNR-like values from recent records; placeholder if records lack SNR field
-    val dataPoints = remember(records) {
-        if (records.isEmpty()) {
-            // Placeholder data when no records available
-            listOf(-12f, -8f, -15f, -6f, -10f, -4f, -14f, -7f, -11f, -3f,
-                   -9f, -13f, -5f, -8f, -2f, -10f, -6f, -12f, -4f, -7f)
-        } else {
-            // Use last 30 records, derive a pseudo-SNR from band mapping
-            records.takeLast(30).mapIndexed { index, _ ->
-                // Without a direct SNR field on QSLCallsignRecord, generate
-                // a representative value from the record index for visualization
-                val base = -15f + (index % 20) * 1.2f
-                base.coerceIn(-25f, 5f)
+    if (records.isEmpty()) {
+        GlassCard(modifier = modifier) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "No QSOs yet",
+                    color = TextFaint,
+                    fontSize = 11.sp,
+                    fontFamily = GeistMonoFamily,
+                )
             }
+        }
+        return
+    }
+
+    // QSLCallsignRecord does not carry SNR, so we synthesize a coarse trend
+    // from the per-record index. This is a visualization placeholder until
+    // SNR is persisted on the QSO log row.
+    val dataPoints = remember(records) {
+        records.takeLast(30).mapIndexed { index, _ ->
+            val base = -15f + (index % 20) * 1.2f
+            base.coerceIn(-25f, 5f)
         }
     }
 

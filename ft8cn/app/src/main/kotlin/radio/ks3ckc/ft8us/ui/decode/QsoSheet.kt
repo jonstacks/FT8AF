@@ -110,6 +110,13 @@ private fun QsoSheetContent(
             isActivated = isActivated,
         )
 
+        // -- Current TX banner: always shows what's queued to transmit next --
+        CurrentTxBanner(
+            mainViewModel = mainViewModel,
+            isActivated = isActivated,
+            isTransmitting = isTransmitting,
+        )
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // -- Call button --
@@ -381,6 +388,9 @@ private fun QsoSequenceVisualizer(
         else -> -1                 // Not started
     }
 
+    val visibleSteps = steps.take((completedSteps + 1).coerceAtLeast(0))
+    if (visibleSteps.isEmpty()) return
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(0.dp),
@@ -394,7 +404,7 @@ private fun QsoSequenceVisualizer(
             modifier = Modifier.padding(bottom = 10.dp),
         )
 
-        steps.forEachIndexed { index, step ->
+        visibleSteps.forEachIndexed { index, step ->
             val isComplete = index < completedSteps
             val isCurrent = index == completedSteps
 
@@ -403,7 +413,7 @@ private fun QsoSequenceVisualizer(
                 step = step,
                 isComplete = isComplete,
                 isCurrent = isCurrent,
-                isLast = index == steps.lastIndex,
+                isLast = index == visibleSteps.lastIndex,
             )
         }
     }
@@ -524,6 +534,59 @@ private fun QsoStepRow(
                 modifier = Modifier.padding(top = 1.dp),
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Current TX Banner
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun CurrentTxBanner(
+    mainViewModel: MainViewModel,
+    isActivated: Boolean,
+    isTransmitting: Boolean,
+) {
+    val functions by mainViewModel.ft8TransmitSignal.mutableFunctions.observeAsState(arrayListOf())
+    val functionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
+
+    if (!isActivated) return
+
+    val currentFn = functions?.firstOrNull { it.functionOrder == functionOrder } ?: return
+    val messageText = currentFn.functionMessage?.takeIf { it.isNotBlank() } ?: return
+
+    val labelText = if (isTransmitting) "TX NOW" else "TX NEXT"
+    val labelColor = if (isTransmitting) StatusBad else Accent
+
+    Spacer(modifier = Modifier.height(14.dp))
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(labelColor.copy(alpha = 0.08f))
+            .border(1.dp, labelColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = labelText,
+            color = labelColor,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.08.sp,
+            modifier = Modifier
+                .background(labelColor.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = messageText,
+            color = TextPrimary,
+            fontFamily = GeistMonoFamily,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
