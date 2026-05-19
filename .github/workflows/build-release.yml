@@ -78,7 +78,22 @@ jobs:
 
       - name: Rename APK
         if: steps.tag.outputs.should_release == 'true'
-        run: mv ft8cn/app/build/outputs/apk/release/app-release.apk ft8cn/app/build/outputs/apk/release/FT8CN-${{ steps.tag.outputs.release_tag }}.apk
+        run: |
+          set -euo pipefail
+          cd ft8cn/app/build/outputs/apk/release
+          # No signing config is wired up (see app/build.gradle:46), so the
+          # release task emits app-release-unsigned.apk. Handle either name so
+          # adding RELEASE_STORE_FILE later will Just Work.
+          if [[ -f app-release.apk ]]; then
+            src=app-release.apk
+          elif [[ -f app-release-unsigned.apk ]]; then
+            src=app-release-unsigned.apk
+          else
+            echo "::error::No release APK found in $(pwd):" >&2
+            ls -la >&2
+            exit 1
+          fi
+          mv "$src" "FT8CN-${{ steps.tag.outputs.release_tag }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
