@@ -188,6 +188,8 @@ public class GeneralVariables {
     public static String cloudlogApiKey = "";//Cloudlog API key
     public static String cloudlogStationID = "";//Cloudlog station ID
     public static String qrzApiKey = ""; //QRZ API key
+    public static String qrzXmlUsername = ""; //QRZ XML API username (for callsign lookups)
+    public static String qrzXmlPassword = ""; //QRZ XML API password
     public static boolean synFrequency = false;//Same-frequency transmit
     public static int transmitDelay = 500;//Transmit delay; also allows decoding time for the previous cycle
     public static int pttDelay = 100;//PTT response time; radios typically need some response time after PTT command, default 100ms

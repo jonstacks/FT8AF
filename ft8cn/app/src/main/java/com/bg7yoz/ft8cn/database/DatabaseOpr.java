@@ -2278,6 +2278,12 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("qrzApiKey")) {
                     GeneralVariables.qrzApiKey = result;
                 }
+                if (name.equalsIgnoreCase("qrzXmlUsername")) {
+                    GeneralVariables.qrzXmlUsername = result;
+                }
+                if (name.equalsIgnoreCase("qrzXmlPassword")) {
+                    GeneralVariables.qrzXmlPassword = result;
+                }
 
                 if (name.equalsIgnoreCase("swrSwitch")) {
                     GeneralVariables.swr_switch_on = result.equals("1");

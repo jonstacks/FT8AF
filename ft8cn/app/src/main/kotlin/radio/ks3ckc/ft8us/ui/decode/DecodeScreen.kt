@@ -61,6 +61,26 @@ fun DecodeScreen(
     var selectedMessage by remember { mutableStateOf<Ft8Message?>(null) }
     var sheetVisible by remember { mutableStateOf(false) }
 
+    // Auto-open sheet when our CQ is answered: a non-CQ toCallsign appears
+    // while activated. Mirrors the experience of tapping "Call" on a CQ row.
+    val txToCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
+    val txActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
+    LaunchedEffect(txToCallsign?.callsign, txActivated) {
+        val cs = txToCallsign?.callsign
+        if (txActivated && !cs.isNullOrEmpty() && cs != "CQ") {
+            val alreadyOpenForCs = sheetVisible &&
+                selectedMessage?.callsignFrom.equals(cs, ignoreCase = true)
+            if (!alreadyOpenForCs) {
+                val trigger = (messageList ?: arrayListOf())
+                    .lastOrNull { it.callsignFrom.equals(cs, ignoreCase = true) }
+                if (trigger != null) {
+                    selectedMessage = trigger
+                    sheetVisible = true
+                }
+            }
+        }
+    }
+
     // Take a snapshot of the list for stable rendering (ArrayList is mutable)
     val messages: List<Ft8Message> = remember(messageList, messageList?.size) {
         ArrayList(messageList ?: arrayListOf())

@@ -75,6 +75,7 @@ fun ActiveQsoPanel(
 ) {
     val toCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
     val isActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
+    val isTransmitting by mainViewModel.ft8TransmitSignal.mutableIsTransmitting.observeAsState(false)
     val functions by mainViewModel.ft8TransmitSignal.mutableFunctions.observeAsState(arrayListOf())
     val functionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
     val messageList by mainViewModel.mutableFt8MessageList.observeAsState(arrayListOf())
@@ -163,14 +164,22 @@ fun ActiveQsoPanel(
         ) {
             // Station header
             StationHeader(
-                targetCallsign = displayCallsign ?: "Searching...",
+                targetCallsign = when {
+                    displayCallsign == null -> "Searching..."
+                    isTransmitting -> "QSOing with $displayCallsign"
+                    else -> "Waiting for $displayCallsign"
+                },
                 snr = if (displayCallsign != null) toCallsign?.snr else null,
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
             // Message log
-            MessageLog(entries = qsoMessages)
+            MessageLog(
+                entries = qsoMessages,
+                transmittingMessage = transmittingMessage.orEmpty(),
+                isTransmitting = isTransmitting,
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -229,7 +238,11 @@ private fun StationHeader(targetCallsign: String, snr: Int?) {
 }
 
 @Composable
-private fun MessageLog(entries: List<QsoLogEntry>) {
+private fun MessageLog(
+    entries: List<QsoLogEntry>,
+    transmittingMessage: String,
+    isTransmitting: Boolean,
+) {
     val listState = rememberLazyListState()
 
     // Auto-scroll to bottom when new entries arrive
@@ -240,6 +253,11 @@ private fun MessageLog(entries: List<QsoLogEntry>) {
     }
 
     if (entries.isEmpty()) {
+        val placeholder = if (isTransmitting && transmittingMessage.isNotEmpty()) {
+            "TX: $transmittingMessage"
+        } else {
+            "Waiting for messages..."
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -247,8 +265,8 @@ private fun MessageLog(entries: List<QsoLogEntry>) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "Waiting for messages...",
-                color = TextFaint,
+                text = placeholder,
+                color = if (isTransmitting && transmittingMessage.isNotEmpty()) Accent else TextFaint,
                 fontSize = 11.sp,
                 fontFamily = GeistMonoFamily,
             )
