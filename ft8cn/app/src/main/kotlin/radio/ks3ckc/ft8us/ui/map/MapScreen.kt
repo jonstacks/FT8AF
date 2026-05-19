@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -594,11 +595,11 @@ private fun StandardMapCanvas(
         // Background panel
         drawRect(color = BgSurface, size = size)
 
-        // Lat/lon grid
-        drawEquirectGrid(w, h)
+        // Land — filled 5° cells so continents read as solid masses
+        drawEquirectLandCells(w, h)
 
-        // Land dots
-        drawEquirectLandDots(halfW, halfH)
+        // Lat/lon grid (over land so it stays visible across continents)
+        drawEquirectGrid(w, h)
 
         // Operator marker (at projected lat/lon, not center)
         val opProj = equirectProject(opLat, opLon)
@@ -734,16 +735,18 @@ private fun DrawScope.drawEquirectGrid(w: Float, h: Float) {
     }
 }
 
-private fun DrawScope.drawEquirectLandDots(halfW: Float, halfH: Float) {
-    val landColor = Color(0x1A94A3B8)
+private fun DrawScope.drawEquirectLandCells(w: Float, h: Float) {
+    // Each LAND_POINTS entry is the top-left of a 5° lat × 5° lon cell.
+    val cellW = w * 5f / 360f
+    val cellH = h * 5f / 180f
+    val landColor = Color(0x5594A3B8) // ~33% alpha — visible against BgSurface
     for ((lat, lon) in LAND_POINTS) {
-        val proj = equirectProject(lat, lon)
-        val px = halfW + proj.x * halfW
-        val py = halfH + proj.y * halfH
-        drawCircle(
+        val x = w * ((lon + 180.0) / 360.0).toFloat()
+        val y = h * ((90.0 - lat) / 180.0).toFloat()
+        drawRect(
             color = landColor,
-            radius = 2f,
-            center = Offset(px, py),
+            topLeft = Offset(x, y),
+            size = Size(cellW, cellH),
         )
     }
 }
