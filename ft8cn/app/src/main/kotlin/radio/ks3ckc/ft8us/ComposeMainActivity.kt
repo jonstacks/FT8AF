@@ -22,6 +22,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import com.bg7yoz.ft8cn.log.OnShareLogEvents
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
 import com.bg7yoz.ft8cn.ui.ToastMessage
 import radio.ks3ckc.ft8us.theme.FT8USTheme
+import radio.ks3ckc.ft8us.ui.components.ExitConfirmDialog
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -57,6 +59,7 @@ class ComposeMainActivity : ComponentActivity() {
     private var bluetoothReceiver: BluetoothStateBroadcastReceive? = null
     private var usbDetachReceiver: BroadcastReceiver? = null
     private lateinit var mainViewModel: MainViewModel
+    private val showExitConfirm: MutableState<Boolean> = mutableStateOf(false)
 
     companion object {
         private const val TAG = "ComposeMainActivity"
@@ -82,20 +85,13 @@ class ComposeMainActivity : ComponentActivity() {
         mainViewModel = MainViewModel.getInstance(this)
         ToastMessage.getInstance()
 
-        // Register back press handler for exit confirmation
+        // Register back press handler for exit confirmation. The dialog itself
+        // is rendered in the Compose tree below; the back press just flips a
+        // state flag so the UI can show our styled ExitConfirmDialog rather
+        // than the stock platform AlertDialog.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                android.app.AlertDialog.Builder(this@ComposeMainActivity)
-                    .setMessage(getString(com.bg7yoz.ft8cn.R.string.exit_confirmation))
-                    .setPositiveButton(getString(com.bg7yoz.ft8cn.R.string.exit)) { _, _ ->
-                        mainViewModel.ft8TransmitSignal.isActivated = false
-                        closeApp()
-                    }
-                    .setNegativeButton(getString(com.bg7yoz.ft8cn.R.string.cancel)) { dialog, _ ->
-                        dialog.dismiss()
-                    }
-                    .create()
-                    .show()
+                showExitConfirm.value = true
             }
         })
 
@@ -128,6 +124,16 @@ class ComposeMainActivity : ComponentActivity() {
                         FT8USApp(mainViewModel)
                     }
                 }
+
+                ExitConfirmDialog(
+                    visible = showExitConfirm.value,
+                    onCancel = { showExitConfirm.value = false },
+                    onConfirm = {
+                        showExitConfirm.value = false
+                        mainViewModel.ft8TransmitSignal.isActivated = false
+                        closeApp()
+                    },
+                )
             }
         }
 

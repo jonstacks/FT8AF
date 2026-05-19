@@ -58,7 +58,6 @@ import androidx.compose.ui.unit.sp
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.count.CountDbOpr
 import com.bg7yoz.ft8cn.log.QSLCallsignRecord
-import com.bg7yoz.ft8cn.ui.ExportLogSheet
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -128,8 +127,8 @@ private data class AwardProgress(
 
 @Composable
 fun LogbookScreen(mainViewModel: MainViewModel) {
-    val context = LocalContext.current
     var activeTab by remember { mutableStateOf(LogbookTab.STATS) }
+    var exportSheetVisible by remember { mutableStateOf(false) }
 
     // Async-loaded state
     var stats by remember { mutableStateOf(LogbookStats()) }
@@ -220,47 +219,54 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(BgApp),
-    ) {
-        // Top bar
-        TopBar(
-            title = "Logbook",
-            subtitle = {
-                val count = if (stats.totalQsos > 0) stats.totalQsos else records.size
-                TopBarSubtitle(text = "$count QSOs \u00b7 All bands")
-            },
-            actions = {
-                IconButton(onClick = {
-                    ExportLogSheet(context, mainViewModel).show()
-                }) {
-                    Icon(
-                        imageVector = Icons.Filled.Share,
-                        contentDescription = "Export QSOs",
-                        tint = TextMuted,
-                    )
-                }
-            },
-        )
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(BgApp),
+        ) {
+            // Top bar
+            TopBar(
+                title = "Logbook",
+                subtitle = {
+                    val count = if (stats.totalQsos > 0) stats.totalQsos else records.size
+                    TopBarSubtitle(text = "$count QSOs \u00b7 All bands")
+                },
+                actions = {
+                    IconButton(onClick = { exportSheetVisible = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "Export QSOs",
+                            tint = TextMuted,
+                        )
+                    }
+                },
+            )
 
-        // Segmented tab switcher
-        SegmentedTabRow(
-            tabs = LogbookTab.entries,
-            selected = activeTab,
-            onSelected = { activeTab = it },
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
-        )
+            // Segmented tab switcher
+            SegmentedTabRow(
+                tabs = LogbookTab.entries,
+                selected = activeTab,
+                onSelected = { activeTab = it },
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
+            )
 
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-        // Tab content
-        when (activeTab) {
-            LogbookTab.STATS -> if (isLoading) StatsLoadingPlaceholder() else StatsTab(stats, records)
-            LogbookTab.RECENT -> RecentTab(records)
-            LogbookTab.AWARDS -> AwardsTab(stats)
+            // Tab content
+            when (activeTab) {
+                LogbookTab.STATS -> if (isLoading) StatsLoadingPlaceholder() else StatsTab(stats, records)
+                LogbookTab.RECENT -> RecentTab(records)
+                LogbookTab.AWARDS -> AwardsTab(stats)
+            }
         }
+
+        // Export bottom sheet (overlays on top)
+        ExportLogSheet(
+            visible = exportSheetVisible,
+            mainViewModel = mainViewModel,
+            onDismiss = { exportSheetVisible = false },
+        )
     }
 }
 
