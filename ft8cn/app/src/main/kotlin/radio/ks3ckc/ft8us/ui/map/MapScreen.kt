@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -141,64 +142,6 @@ private fun azProject(opLat: Double, opLon: Double, lat: Double, lon: Double): P
         y = (-y / PI).toFloat(),
         distKm = c * 6371.0,
     )
-}
-
-// ---------------------------------------------------------------------------
-// Land map data (5-degree grid, 36 rows x 72 cols)
-// ---------------------------------------------------------------------------
-
-private val LAND_MAP = arrayOf(
-    "000000000000000000000000000000000000000000000000000000000000000000000000",
-    "000000000000000000000000000111100000000000000000000000000000000000000000",
-    "000000000000111110000001111111111100000000011110000000000000000000000000",
-    "000000000011111111100011111111111111000000111111100000000000000000000000",
-    "000000000011111111111111111111111111100001111111110000000000000000000000",
-    "000000001111111111111111111111111111110011111111111100000000000000000000",
-    "000000001111111111111111111111111111111111111111111100000000000000000000",
-    "000000011111111111111111111111111111111111111111111110000000000000000000",
-    "000000011111111111111111111111111111111111111111111110000000000000000000",
-    "000000011111111111111111111111111111111111111111111111000000000000000000",
-    "000000011111111111111111111111111111111111111111111111100000001000000000",
-    "000000011111111111111111111111111111111111111111111111100000011100000000",
-    "000000001111111111111111111111111111111111111111111111110000011100000000",
-    "000000000011111111111111111111111111111111111111111111110001111000000000",
-    "000000000001111111111111111111111111111111111111111111100001110000000000",
-    "000000000000111111111111111111111111111111111111111111000001110000000000",
-    "000000000000011111100011111111110111111111011111111100000001110000000000",
-    "000000000000001111100001111111100011110010001111111000000001100000000000",
-    "000000000000000011100000111111000001100000000111110000000011000000000000",
-    "000000000000000001000000011110000001100000000011100000000111000000000000",
-    "000000000000000000000000001100000001100000000001000000001110000000000000",
-    "000000000000000000000000001100000001110000000000000000011100000000000000",
-    "000000000000000000000000000100000000110000000000000000111000000000000000",
-    "000000000000000000000000000000000000110000000000000001110000000000000000",
-    "000000000000000000000000000000000000010000000000000011100000000000000000",
-    "000000000000000000000000000000000000000000000000000111100000000000000000",
-    "000000000000000000000000000000000000000000000000001111000000000000000000",
-    "000000000000000000000000000000000000000000000000011110000000000000000000",
-    "000000000000000000000000000000000000000000000000111100000000000000000000",
-    "000000000000000000000000000000000000000000000001111100000000000000000000",
-    "000000000000000000000000000000000000000000000001111100000000000000000000",
-    "000000000000000000000000000000000000000000000011111000000000000000000000",
-    "000000000000000000000000000000000011111111111111111111111111111100000000",
-    "000000000000000000000000001111111111111111111111111111111111111111000000",
-    "000000000000000000001111111111111111111111111111111111111111111111110000",
-    "111111111111111111111111111111111111111111111111111111111111111111111111",
-)
-
-private val LAND_POINTS: List<Pair<Double, Double>> by lazy {
-    val points = mutableListOf<Pair<Double, Double>>()
-    for (row in LAND_MAP.indices) {
-        val lat = 90.0 - row * 5.0
-        val line = LAND_MAP[row]
-        for (col in line.indices) {
-            if (line[col] == '1') {
-                val lon = -180.0 + col * 5.0
-                points.add(Pair(lat, lon))
-            }
-        }
-    }
-    points
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +393,11 @@ private fun AzimuthalMapCanvas(
         label = "map-pulse-phase",
     )
 
+    val context = LocalContext.current
+    val landRings by produceState<List<FloatArray>?>(initialValue = null, context) {
+        value = withContext(Dispatchers.IO) { WorldOutlines.load(context) }
+    }
+
     Canvas(modifier = modifier) {
         val cx = size.width / 2f
         val cy = size.height / 2f
@@ -462,8 +410,8 @@ private fun AzimuthalMapCanvas(
             center = Offset(cx, cy),
         )
 
-        // Land dots
-        drawLandDots(opLat, opLon, cx, cy, r)
+        // Land — Natural Earth 110m vector outlines projected via azProject
+        landRings?.let { rings -> drawAzimuthalLand(rings, opLat, opLon, cx, cy, r) }
 
         // Range rings
         drawRangeRings(cx, cy, r)
@@ -770,31 +718,48 @@ private fun DrawScope.drawWorldLand(rings: List<FloatArray>, w: Float, h: Float)
 }
 
 // ---------------------------------------------------------------------------
-// Drawing helpers
+// Azimuthal land renderer + drawing helpers
 // ---------------------------------------------------------------------------
 
-private fun DrawScope.drawLandDots(
+private fun DrawScope.drawAzimuthalLand(
+    rings: List<FloatArray>,
     opLat: Double,
     opLon: Double,
     cx: Float,
     cy: Float,
     r: Float,
 ) {
-    val landColor = Color(0x1A94A3B8) // subtle gray
-    for ((lat, lon) in LAND_POINTS) {
-        val proj = azProject(opLat, opLon, lat, lon)
-        val px = cx + proj.x * r
-        val py = cy + proj.y * r
-
-        val dx = px - cx
-        val dy = py - cy
-        if (sqrt(dx * dx + dy * dy) > r) continue
-
-        drawCircle(
-            color = landColor,
-            radius = 2.5f,
-            center = Offset(px, py),
-        )
+    val land = Path()
+    for (ring in rings) {
+        if (ring.size < 6) continue
+        var first = true
+        var i = 0
+        while (i < ring.size) {
+            val lon = ring[i].toDouble()
+            val lat = ring[i + 1].toDouble()
+            val proj = azProject(opLat, opLon, lat, lon)
+            val px = cx + proj.x * r
+            val py = cy + proj.y * r
+            if (first) {
+                land.moveTo(px, py)
+                first = false
+            } else {
+                land.lineTo(px, py)
+            }
+            i += 2
+        }
+        land.close()
+    }
+    // Clip to the disc so anything that strays past the horizon (or wraps
+    // weirdly near the antipode) is hidden.
+    val disc = Path().apply {
+        addOval(androidx.compose.ui.geometry.Rect(
+            left = cx - r, top = cy - r, right = cx + r, bottom = cy + r,
+        ))
+    }
+    clipPath(disc) {
+        drawPath(land, color = Color(0x4094A3B8))
+        drawPath(land, color = Color(0x9094A3B8), style = Stroke(width = 0.75f))
     }
 }
 
