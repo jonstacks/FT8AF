@@ -511,6 +511,9 @@ fun SettingsScreen(
                 GeneralVariables.qrzXmlPassword = pass
                 mainViewModel.databaseOpr.writeConfig("qrzXmlUsername", user, null)
                 mainViewModel.databaseOpr.writeConfig("qrzXmlPassword", pass, null)
+                // Drop cached lookups so retries don't return stale nulls
+                // from earlier failed attempts.
+                radio.ks3ckc.ft8us.qrz.QrzXmlClient.clearCache()
                 showQrzCreds = false
             },
         )

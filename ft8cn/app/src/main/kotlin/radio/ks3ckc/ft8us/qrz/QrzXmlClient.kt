@@ -63,6 +63,18 @@ object QrzXmlClient {
         if (key != null) "OK" else (lastError ?: "Auth failed")
     }
 
+    /**
+     * Clear cached lookups. Call when credentials change so previously
+     * failed lookups can be retried with the new auth.
+     */
+    fun clearCache() {
+        // mutex-free read/clear is safe here: only changes the map identity from the
+        // perspective of callers; concurrent puts will just produce a slightly old
+        // view that the next call resolves.
+        cache.clear()
+        lastError = null
+    }
+
     suspend fun lookup(callsign: String): QrzLookup? = withContext(Dispatchers.IO) {
         val key = callsign.trim().uppercase()
         if (key.isEmpty()) return@withContext null
@@ -87,14 +99,28 @@ object QrzXmlClient {
             xml = fetch("s=$session;callsign=${urlEncode(key)}") ?: return@withContext null
         }
 
-        parseTag(xml, "Error")?.let {
-            lastError = it
-            log("lookup($key) error: $it")
+        val error = parseTag(xml, "Error")
+        if (error != null) {
+            lastError = error
+            log("lookup($key) error: $error")
+            // Dump a snippet of the response for diagnosis (truncated to keep PII out).
+            log("lookup($key) response excerpt: ${xml.take(400).replace("\n", " ")}")
+            // Don't cache error responses — let the user retry after fixing.
+            return@withContext null
         }
 
         val image = parseTag(xml, "image")
+        if (image.isNullOrEmpty()) {
+            // No <image> tag — log a snippet so we can see what QRZ returned
+            // (this is the most common failure mode if the callsign has no
+            // profile photo or our parser is missing the tag).
+            log("lookup($key) no image; response head: ${xml.take(600).replace("\n", " ")}")
+            // Don't cache — try again later in case the callsign uploads a photo.
+            return@withContext null
+        }
+
+        log("lookup($key) -> $image")
         val result = QrzLookup(imageUrl = image)
-        log("lookup($key) -> imageUrl=${image ?: "<none>"}")
         cacheMutex.withLock {
             cache[key] = result
             while (cache.size > CACHE_MAX) {
