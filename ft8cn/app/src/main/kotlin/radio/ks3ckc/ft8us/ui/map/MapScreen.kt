@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -38,11 +39,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +53,8 @@ import com.bg7yoz.ft8cn.Ft8Message
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import radio.ks3ckc.ft8us.theme.*
 import radio.ks3ckc.ft8us.ui.components.GlassCard
 import radio.ks3ckc.ft8us.ui.components.TopBar
@@ -586,6 +591,11 @@ private fun StandardMapCanvas(
         label = "map-pulse-phase-std",
     )
 
+    val context = LocalContext.current
+    val landRings by produceState<List<FloatArray>?>(initialValue = null, context) {
+        value = withContext(Dispatchers.IO) { WorldOutlines.load(context) }
+    }
+
     Canvas(modifier = modifier.clip(RoundedCornerShape(6.dp))) {
         val w = size.width
         val h = size.height
@@ -595,8 +605,8 @@ private fun StandardMapCanvas(
         // Background panel
         drawRect(color = BgSurface, size = size)
 
-        // Land — filled 5° cells so continents read as solid masses
-        drawEquirectLandCells(w, h)
+        // Land — Natural Earth 110m vector outlines (drawn once polygons are loaded)
+        landRings?.let { rings -> drawWorldLand(rings, w, h) }
 
         // Lat/lon grid (over land so it stays visible across continents)
         drawEquirectGrid(w, h)
@@ -735,20 +745,28 @@ private fun DrawScope.drawEquirectGrid(w: Float, h: Float) {
     }
 }
 
-private fun DrawScope.drawEquirectLandCells(w: Float, h: Float) {
-    // Each LAND_POINTS entry is the top-left of a 5° lat × 5° lon cell.
-    val cellW = w * 5f / 360f
-    val cellH = h * 5f / 180f
-    val landColor = Color(0x5594A3B8) // ~33% alpha — visible against BgSurface
-    for ((lat, lon) in LAND_POINTS) {
-        val x = w * ((lon + 180.0) / 360.0).toFloat()
-        val y = h * ((90.0 - lat) / 180.0).toFloat()
-        drawRect(
-            color = landColor,
-            topLeft = Offset(x, y),
-            size = Size(cellW, cellH),
+private fun DrawScope.drawWorldLand(rings: List<FloatArray>, w: Float, h: Float) {
+    // rings are flat float arrays of [lon, lat, lon, lat, ...] in geographic degrees.
+    // Project to canvas via equirectangular: x = w*(lon+180)/360, y = h*(90-lat)/180.
+    val path = Path()
+    for (ring in rings) {
+        if (ring.size < 6) continue // need at least 3 points for a polygon
+        path.moveTo(
+            w * (ring[0] + 180f) / 360f,
+            h * (90f - ring[1]) / 180f,
         )
+        var i = 2
+        while (i < ring.size) {
+            path.lineTo(
+                w * (ring[i] + 180f) / 360f,
+                h * (90f - ring[i + 1]) / 180f,
+            )
+            i += 2
+        }
+        path.close()
     }
+    drawPath(path, color = Color(0x4094A3B8))                                  // fill
+    drawPath(path, color = Color(0x9094A3B8), style = Stroke(width = 0.75f))   // outline
 }
 
 // ---------------------------------------------------------------------------
