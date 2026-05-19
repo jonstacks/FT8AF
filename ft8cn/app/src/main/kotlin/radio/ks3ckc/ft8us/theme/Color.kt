@@ -46,3 +46,7 @@ val Band10m = Color(0xFFC084FC)
 val Band30m = Color(0xFFF472B6)
 val Band17m = Color(0xFFFACC15)
 val Band12m = Color(0xFFFB7185)
+
+// PSK Reporter overlay (red-coral, intentionally absent from the rest of the palette so
+// auxiliary "stations hearing me" spots are visually distinct from decoded FT8 markers).
+val PskSpot = Color(0xFFF87171)
