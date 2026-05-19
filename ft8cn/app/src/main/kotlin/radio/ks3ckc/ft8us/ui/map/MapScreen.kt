@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,6 +81,32 @@ private data class ProjectedPoint(
     val y: Float,
     val distKm: Double,
 )
+
+private enum class MapViewMode { STANDARD, AZIMUTHAL }
+
+// ---------------------------------------------------------------------------
+// Great-circle distance (km) — used by both projections
+// ---------------------------------------------------------------------------
+
+private fun greatCircleKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val phi1 = Math.toRadians(lat1)
+    val phi2 = Math.toRadians(lat2)
+    val dLam = Math.toRadians(lon2 - lon1)
+    val cosC = sin(phi1) * sin(phi2) + cos(phi1) * cos(phi2) * cos(dLam)
+    return acos(cosC.coerceIn(-1.0, 1.0)) * 6371.0
+}
+
+// ---------------------------------------------------------------------------
+// Equirectangular (Plate Carrée) projection — lat/lon -> normalized [-1,1]
+// ---------------------------------------------------------------------------
+
+private fun equirectProject(lat: Double, lon: Double): ProjectedPoint {
+    return ProjectedPoint(
+        x = (lon / 180.0).toFloat(),
+        y = (-lat / 90.0).toFloat(),
+        distKm = 0.0,
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Azimuthal equidistant projection
@@ -178,6 +207,7 @@ fun MapScreen(mainViewModel: MainViewModel) {
     )
 
     var selectedCallsign by remember { mutableStateOf<String?>(null) }
+    var viewMode by rememberSaveable { mutableStateOf(MapViewMode.STANDARD) }
 
     // Derive operator lat/lon from grid
     val opLatLng = remember(myGrid) {
@@ -238,34 +268,67 @@ fun MapScreen(mainViewModel: MainViewModel) {
             .fillMaxSize()
             .background(BgApp),
     ) {
-        TopBar(title = "Map") {
-            Text(
-                text = if (myGrid.isNullOrEmpty()) "No grid set" else myGrid,
-                color = Signal,
-                fontFamily = GeistMonoFamily,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        }
+        TopBar(
+            title = "Map",
+            subtitle = {
+                Text(
+                    text = if (myGrid.isNullOrEmpty()) "No grid set" else myGrid,
+                    color = Signal,
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            },
+            actions = {
+                MapViewToggle(
+                    mode = viewMode,
+                    onModeChange = { viewMode = it },
+                )
+            },
+        )
 
-        // Map canvas
+        // Map canvas — horizontal swipe toggles between standard and azimuthal
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 8.dp)
+                .pointerInput(Unit) {
+                    var dragX = 0f
+                    val threshold = 80.dp.toPx()
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragX = 0f },
+                        onHorizontalDrag = { _, dx -> dragX += dx },
+                        onDragEnd = {
+                            if (dragX <= -threshold) viewMode = MapViewMode.AZIMUTHAL
+                            else if (dragX >= threshold) viewMode = MapViewMode.STANDARD
+                        },
+                    )
+                },
             contentAlignment = Alignment.Center,
         ) {
-            AzimuthalMapCanvas(
-                opLat = opLat,
-                opLon = opLon,
-                stations = stations,
-                selectedCallsign = selectedCallsign,
-                onStationSelected = { selectedCallsign = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
-            )
+            when (viewMode) {
+                MapViewMode.STANDARD -> StandardMapCanvas(
+                    opLat = opLat,
+                    opLon = opLon,
+                    stations = stations,
+                    selectedCallsign = selectedCallsign,
+                    onStationSelected = { selectedCallsign = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(2f),
+                )
+                MapViewMode.AZIMUTHAL -> AzimuthalMapCanvas(
+                    opLat = opLat,
+                    opLon = opLon,
+                    stations = stations,
+                    selectedCallsign = selectedCallsign,
+                    onStationSelected = { selectedCallsign = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f),
+                )
+            }
         }
 
         // Selected station info card
@@ -296,11 +359,62 @@ fun MapScreen(mainViewModel: MainViewModel) {
             )
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = "Azimuthal Equidistant",
+                text = if (viewMode == MapViewMode.STANDARD) "Equirectangular" else "Azimuthal Equidistant",
                 color = TextDim,
                 fontSize = 9.sp,
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// View-mode toggle (segmented pill)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun MapViewToggle(
+    mode: MapViewMode,
+    onModeChange: (MapViewMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(BgSurface3),
+    ) {
+        TogglePill(
+            label = "STD",
+            active = mode == MapViewMode.STANDARD,
+            onClick = { onModeChange(MapViewMode.STANDARD) },
+        )
+        TogglePill(
+            label = "AZ",
+            active = mode == MapViewMode.AZIMUTHAL,
+            onClick = { onModeChange(MapViewMode.AZIMUTHAL) },
+        )
+    }
+}
+
+@Composable
+private fun TogglePill(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) Accent else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (active) BgApp else TextMuted,
+            fontFamily = GeistMonoFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -448,6 +562,193 @@ private fun AzimuthalMapCanvas(
 }
 
 // ---------------------------------------------------------------------------
+// Standard (equirectangular) map canvas
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun StandardMapCanvas(
+    opLat: Double,
+    opLon: Double,
+    stations: List<StationMarker>,
+    selectedCallsign: String?,
+    onStationSelected: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pulseTransition = rememberInfiniteTransition(label = "map-pulse-std")
+    val pulsePhase by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "map-pulse-phase-std",
+    )
+
+    Canvas(modifier = modifier.clip(RoundedCornerShape(6.dp))) {
+        val w = size.width
+        val h = size.height
+        val halfW = w / 2f
+        val halfH = h / 2f
+
+        // Background panel
+        drawRect(color = BgSurface, size = size)
+
+        // Lat/lon grid
+        drawEquirectGrid(w, h)
+
+        // Land dots
+        drawEquirectLandDots(halfW, halfH)
+
+        // Operator marker (at projected lat/lon, not center)
+        val opProj = equirectProject(opLat, opLon)
+        val opX = halfW + opProj.x * halfW
+        val opY = halfH + opProj.y * halfH
+        drawCircle(
+            color = Accent.copy(alpha = 0.25f),
+            radius = 8f,
+            center = Offset(opX, opY),
+        )
+        drawCircle(
+            color = Accent,
+            radius = 4f,
+            center = Offset(opX, opY),
+        )
+
+        // Station markers
+        for ((index, station) in stations.withIndex()) {
+            val proj = equirectProject(station.lat, station.lon)
+            val sx = halfW + proj.x * halfW
+            val sy = halfH + proj.y * halfH
+
+            val isSelected = station.callsign == selectedCallsign
+            val markerR = if (isSelected) 5f else 3.5f
+            val glowR = if (isSelected) 12f else 8f
+
+            // Pulse rings (same pattern as azimuthal: shared transition + per-station phase offset)
+            val baseAmp = if (isSelected) 1f else 0.55f
+            val stationOffset = (index * 0.137f) % 1f
+            for (ringIndex in 0..1) {
+                val phase = ((pulsePhase + stationOffset + ringIndex * 0.5f) % 1f)
+                val ringR = glowR + (16f + (if (isSelected) 10f else 0f)) * phase
+                val ringAlpha = (1f - phase) * 0.35f * baseAmp
+                if (ringAlpha > 0f) {
+                    drawCircle(
+                        color = station.color.copy(alpha = ringAlpha),
+                        radius = ringR,
+                        center = Offset(sx, sy),
+                        style = Stroke(width = 1f),
+                    )
+                }
+            }
+
+            // Bearing line for selected station (straight rhumb-style on flat map)
+            if (isSelected) {
+                drawLine(
+                    color = station.color.copy(alpha = 0.4f),
+                    start = Offset(opX, opY),
+                    end = Offset(sx, sy),
+                    strokeWidth = 1.5f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)),
+                )
+            }
+
+            // Glow
+            drawCircle(
+                color = station.color.copy(alpha = if (isSelected) 0.25f else 0.15f),
+                radius = glowR,
+                center = Offset(sx, sy),
+            )
+
+            // Marker dot
+            drawCircle(
+                color = station.color,
+                radius = markerR,
+                center = Offset(sx, sy),
+            )
+            drawCircle(
+                color = BgApp,
+                radius = markerR,
+                center = Offset(sx, sy),
+                style = Stroke(width = 1.2f),
+            )
+
+            // Callsign label
+            val textColor = if (isSelected) {
+                android.graphics.Color.WHITE
+            } else {
+                android.graphics.Color.argb(180, 138, 150, 177)
+            }
+            val paint = android.graphics.Paint().apply {
+                color = textColor
+                textSize = if (isSelected) 22f else 18f
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.NORMAL,
+                )
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                station.callsign,
+                sx + glowR + 4f,
+                sy + paint.textSize / 3f,
+                paint,
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawEquirectGrid(w: Float, h: Float) {
+    val gridColor = Color(0x1894A3B8)
+    val axisColor = Color(0x30FFAF5E) // equator + prime meridian — accent tint
+    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f))
+
+    // Meridians (vertical lines) every 30° lon, from -180 to 180
+    var lon = -180
+    while (lon <= 180) {
+        val isPrime = lon == 0
+        val x = w * (lon + 180f) / 360f
+        drawLine(
+            color = if (isPrime) axisColor else gridColor,
+            start = Offset(x, 0f),
+            end = Offset(x, h),
+            strokeWidth = if (isPrime) 1f else 0.5f,
+            pathEffect = dashEffect,
+        )
+        lon += 30
+    }
+
+    // Parallels (horizontal lines) every 30° lat, from -90 to 90
+    var lat = -90
+    while (lat <= 90) {
+        val isEquator = lat == 0
+        val y = h * (90f - lat) / 180f
+        drawLine(
+            color = if (isEquator) axisColor else gridColor,
+            start = Offset(0f, y),
+            end = Offset(w, y),
+            strokeWidth = if (isEquator) 1f else 0.5f,
+            pathEffect = dashEffect,
+        )
+        lat += 30
+    }
+}
+
+private fun DrawScope.drawEquirectLandDots(halfW: Float, halfH: Float) {
+    val landColor = Color(0x1A94A3B8)
+    for ((lat, lon) in LAND_POINTS) {
+        val proj = equirectProject(lat, lon)
+        val px = halfW + proj.x * halfW
+        val py = halfH + proj.y * halfH
+        drawCircle(
+            color = landColor,
+            radius = 2f,
+            center = Offset(px, py),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Drawing helpers
 // ---------------------------------------------------------------------------
 
@@ -563,7 +864,7 @@ private fun SelectedStationCard(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val proj = azProject(opLat, opLon, station.lat, station.lon)
+    val distKm = greatCircleKm(opLat, opLon, station.lat, station.lon)
     val bearing = computeBearing(opLat, opLon, station.lat, station.lon)
 
     GlassCard(modifier = modifier.clickable { onDismiss() }) {
@@ -593,7 +894,7 @@ private fun SelectedStationCard(
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                InfoChip("${String.format("%.0f", proj.distKm)} km", "Distance")
+                InfoChip("${String.format("%.0f", distKm)} km", "Distance")
                 InfoChip("${String.format("%.0f", bearing)}\u00B0", "Bearing")
                 InfoChip("${station.snr} dB", "SNR")
             }
