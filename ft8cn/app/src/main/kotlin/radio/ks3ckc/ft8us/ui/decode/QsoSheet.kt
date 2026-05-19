@@ -424,13 +424,17 @@ private val QsoStepLabels = listOf("call", "report", "roger", "confirm", "73")
 /**
  * Resolve which step (0..4) the QSO is currently on, or -1 for "not started".
  * Shared by the visualizer and the live status row so they cannot diverge.
+ *
+ * Just-viewing (no active QSO) always returns -1 so the sequence stays
+ * grayed out until the operator commits via the Call button. Step state
+ * only lights up for a live QSO with this callsign or for a previously
+ * worked-and-confirmed call (which lights all 5 as complete).
  */
 private fun computeCurrentStepIndex(
     message: Ft8Message,
     isLiveQso: Boolean,
     liveFunctionOrder: Int,
 ): Int {
-    val historicalFunOrder = GeneralVariables.checkFunOrder(message)
     val isFullyComplete = message.isQSL_Callsign && !isLiveQso
     return when {
         isFullyComplete -> 5
@@ -442,8 +446,6 @@ private fun computeCurrentStepIndex(
             5 -> 4
             else -> -1
         }
-        historicalFunOrder == 5 -> 5
-        historicalFunOrder in 1..4 -> historicalFunOrder
         else -> -1
     }
 }
