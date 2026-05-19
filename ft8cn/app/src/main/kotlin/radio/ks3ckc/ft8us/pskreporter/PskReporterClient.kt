@@ -1,6 +1,7 @@
 package radio.ks3ckc.ft8us.pskreporter
 
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
 import kotlinx.coroutines.Dispatchers
@@ -45,13 +46,21 @@ data class PskReporterSpot(
 
 object PskReporterClient {
     private const val TAG = "PskReporterClient"
-    private const val BASE_URL = "https://retrieve.pskreporter.info/query"
+    private const val DEFAULT_BASE_URL = "https://retrieve.pskreporter.info/query"
     private const val AGENT = "ft8af-1.0"
     private const val APP_CONTACT = "ft8af@example.org"
     private const val COOLDOWN_MS = 290_000L
     private const val RATE_LIMIT_COOLDOWN_MS = 15L * 60_000L
     private const val MAX_SPOTS = 500
     private const val IO_TIMEOUT_MS = 8000
+
+    @VisibleForTesting
+    @JvmField
+    internal var baseUrl: String = DEFAULT_BASE_URL
+
+    @VisibleForTesting
+    @JvmField
+    internal var clock: () -> Long = { System.currentTimeMillis() }
 
     @Volatile
     var lastError: String? = null
@@ -63,7 +72,7 @@ object PskReporterClient {
     private var rateLimitedUntilEpochMs: Long = 0L
 
     suspend fun fetchSpotsForMe(call: String, secondsBack: Int): List<PskReporterSpot>? = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis()
+        val now = clock()
         if (now < rateLimitedUntilEpochMs) {
             log("skipped (rate-limit back-off ${(rateLimitedUntilEpochMs - now) / 1000}s remaining)")
             return@withContext null
@@ -75,7 +84,7 @@ object PskReporterClient {
         lastFetchEpochMs = now
 
         val callUpper = call.uppercase()
-        val url = "$BASE_URL?senderCallsign=${urlEncode(callUpper)}" +
+        val url = "$baseUrl?senderCallsign=${urlEncode(callUpper)}" +
             "&flowStartSeconds=-$secondsBack" +
             "&rronly=1" +
             "&mode=FT8" +
@@ -99,7 +108,7 @@ object PskReporterClient {
             }
             val code = conn.responseCode
             if (code == 429 || code == 503) {
-                rateLimitedUntilEpochMs = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
+                rateLimitedUntilEpochMs = clock() + RATE_LIMIT_COOLDOWN_MS
                 log("rate-limited (http $code) — backing off ${RATE_LIMIT_COOLDOWN_MS / 60_000}min")
                 lastError = "rate-limited ($code)"
                 return null
@@ -185,6 +194,15 @@ object PskReporterClient {
         } else {
             out
         }
+    }
+
+    @VisibleForTesting
+    internal fun resetForTests() {
+        lastError = null
+        lastFetchEpochMs = 0L
+        rateLimitedUntilEpochMs = 0L
+        baseUrl = DEFAULT_BASE_URL
+        clock = { System.currentTimeMillis() }
     }
 
     private fun urlEncode(s: String): String =

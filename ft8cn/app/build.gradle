@@ -86,6 +86,15 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.8'
     }
+    testOptions {
+        unitTests {
+            // Robolectric needs the merged manifest + resources to bring up an
+            // Android runtime; returnDefaultValues keeps unmocked framework
+            // calls (e.g. android.util.Log) from throwing in pure-JVM tests.
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
+    }
 //    externalNativeBuild {
 //        cmake {
 //            path file('src/main/cpp/CMakeLists.txt')
@@ -98,6 +107,15 @@ android {
             java.srcDirs = ['src/main/java']
             kotlin.srcDirs = ['src/main/kotlin']
             jniLibs.srcDirs = ['libs']
+        }
+        test {
+            java.srcDirs = ['src/test/java']
+            kotlin.srcDirs = ['src/test/kotlin']
+            resources.srcDirs = ['src/test/resources']
+        }
+        androidTest {
+            java.srcDirs = ['src/androidTest/java']
+            kotlin.srcDirs = ['src/androidTest/kotlin']
         }
     }
     namespace 'com.bg7yoz.ft8cn'
@@ -139,4 +157,24 @@ dependencies {
 
     // Image loading for QRZ profile avatars
     implementation 'io.coil-kt:coil-compose:2.6.0'
+
+    // --- JVM unit + Robolectric tests ---
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+    testImplementation 'androidx.test:core:1.5.0'
+    testImplementation 'androidx.test.ext:junit:1.1.5'
+    testImplementation 'com.google.truth:truth:1.4.2'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    testImplementation 'androidx.compose.ui:ui-test-junit4'
+
+    // ui-test-manifest must be debug-scoped: the merged debug manifest is what
+    // hosts ComponentActivity for createComposeRule(). testImplementation
+    // wouldn't surface it during the unit-test build.
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+
+    // --- Connected (instrumented) tests ---
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
 }
