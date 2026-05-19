@@ -6,6 +6,10 @@ package com.bg7yoz.ft8cn.log;
  * @date 2023-03-20
  */
 public class QSLCallsignRecord {
+    // QSLTable.id of a representative underlying QSO row for this grouped record.
+    // Populated by GetQLSCallsignByCallsign so callers (e.g. logbook edit/delete UI)
+    // can identify the row in QSLTable. 0 means "no id available".
+    public int id = 0;
     private String callsign;
     private String mode;
     private String grid;
@@ -15,6 +19,8 @@ public class QSLCallsignRecord {
     public String dxccStr="";
     public boolean isQSL=false;//Whether manually confirmed
     public boolean isLotW_QSL = false;//Whether confirmed via LoTW
+    public boolean syncedCloudlog = false;//Whether at least one underlying row was accepted by Cloudlog/Wavelog/Nextlog
+    public boolean syncedQrz = false;//Whether at least one underlying row was accepted by QRZ
 
     public String getCallsign() {
         return callsign;
