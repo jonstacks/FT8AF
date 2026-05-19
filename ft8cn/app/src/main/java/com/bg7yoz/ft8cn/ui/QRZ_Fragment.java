@@ -42,10 +42,19 @@ public class QRZ_Fragment extends Fragment {
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
                              Bundle savedInstanceState) {
         binding=FragmentQrzBinding.inflate(inflater, container, false);
-        binding.qrzWebView.getSettings().setJavaScriptEnabled(true);
+        WebSettings qrzSettings = binding.qrzWebView.getSettings();
+        qrzSettings.setJavaScriptEnabled(true);
+        // Block access to local files and content:// URIs from inside this WebView so a
+        // compromised qrz.com page (or a stored XSS) can't pivot to reading our cache or
+        // FileProvider contents. setAllowFileAccessFromFileURLs / Universal default false on
+        // API 30+ but set them explicitly for older devices we still support (minSdk 23).
+        qrzSettings.setAllowFileAccess(false);
+        qrzSettings.setAllowContentAccess(false);
+        qrzSettings.setAllowFileAccessFromFileURLs(false);
+        qrzSettings.setAllowUniversalAccessFromFileURLs(false);
         //binding.qrzWebView.getSettings().setDomStorageEnabled(true);       // This needs to be added
-        binding.qrzWebView.getSettings().setLayoutAlgorithm(WebSettings.LayoutAlgorithm.SINGLE_COLUMN);
-        binding.qrzWebView.getSettings().setUseWideViewPort(true);
+        qrzSettings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.SINGLE_COLUMN);
+        qrzSettings.setUseWideViewPort(true);
 
         binding.qrzWebView.getSettings().setLoadWithOverviewMode(true);
         binding.qrzWebView.getSettings().setSupportZoom(true);

@@ -15,6 +15,8 @@ import java.io.OutputStream;
 import java.io.StringReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 
 enum ServiceType{
@@ -121,25 +123,18 @@ public class ThirdPartyService {
     public static void UploadToCloudLog(QSLRecord qslRecord){
         // Convert to ADIF format
         String logStr = QSLRecordToADIF(qslRecord,ServiceType.Cloudlog);
-        Log.d(TAG,logStr);
         String address = GeneralVariables.getCloudlogServerAddress();
         if (!address.endsWith("/")){
             address+="/";
         }
-        HashMap<String,String> json = new HashMap<>();
-        json.put("key", GeneralVariables.getCloudlogServerApiKey());
-        json.put("station_profile_id", GeneralVariables.getCloudlogStationID());
-        json.put("type","adif");
-        json.put("string", logStr);
-
         JSONStringer js = new JSONStringer();
         try {
             String result = js.object().key("key").value(GeneralVariables.getCloudlogServerApiKey()).key("station_profile_id").value(GeneralVariables.getCloudlogStationID())
                     .key("type").value("adif").key("string").value(logStr).endObject().toString();
             String clRes = sendPostRequest(address+"api/qso/",result);
-            Log.d(TAG,"Updated to Cloudlog successfully. result:"+clRes);
+            Log.d(TAG, "Cloudlog upload " + (clRes != null ? "succeeded" : "failed"));
         }catch (Exception k){
-            Log.d(TAG, k.toString());
+            Log.d(TAG, "Cloudlog upload error: " + k.getClass().getSimpleName());
         }
     }
     public static boolean CheckCloudlogConnection(){
@@ -150,14 +145,14 @@ public class ThirdPartyService {
             address+="/";
         }
         try{
+            // The Cloudlog auth endpoint takes the key as a path segment, so the constructed
+            // URL is unavoidably credential-bearing. Do not log it.
             String url = address + "api/auth/"+ apiKey;
-            Log.d(TAG, "URL: "+url);
             String result = sendGetRequest(url);
             if (result == null) {
                 Log.d(TAG, "Cloudlog connection failed: no response");
                 return false;
             }
-            Log.d(TAG, result);
             // Nextlog and Wavelog both implement /api/auth but return slightly different shapes
             // (XML declaration, extra whitespace, etc.). Match on the meaningful markers so all
             // three Cloudlog-compatible backends report Pass.
@@ -165,7 +160,7 @@ public class ThirdPartyService {
             return compact.contains("<status>Valid</status>")
                     && compact.contains("<rights>rw</rights>");
         }catch (Exception e){
-            Log.d(TAG, e.toString());
+            Log.d(TAG, "Cloudlog auth error: " + e.getClass().getSimpleName());
             return false;
         }
     }
@@ -173,26 +168,27 @@ public class ThirdPartyService {
     public static boolean CheckQRZConnection(){
         String apiKey = GeneralVariables.getQrzApiKey();
         try{
-            String url = "https://logbook.qrz.com/api?KEY="+apiKey+"&ACTION=STATUS";
-            String result = sendGetRequest(url);
+            // POST so the API key is in the body rather than the URL, where it could leak
+            // via proxies, server access logs, or our own logcat.
+            String body = "KEY=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8.name())
+                    + "&ACTION=STATUS";
+            String result = sendPostFormRequest("https://logbook.qrz.com/api", body);
             if (result == null) {
                 Log.d(TAG, "QRZ connection failed: no response");
                 return false;
             }
-            HashMap<String,String> status = new HashMap<>();
+            String qrzResult = null;
             for (String s : result.split("&")) {
-                String[] split = s.split("=");
-                if (split.length>1){
-                    status.put(split[0],split[1]);
+                String[] split = s.split("=", 2);
+                if (split.length > 1 && "RESULT".equals(split[0])) {
+                    qrzResult = split[1];
+                    break;
                 }
             }
-            Log.d(TAG, status.toString());
-            if (!"OK".equals(status.get("RESULT"))){
-                return false;
-            }
-            return true;
+            Log.d(TAG, "QRZ status RESULT=" + qrzResult);
+            return "OK".equals(qrzResult);
         }catch (Exception e){
-            Log.d(TAG, e.toString());
+            Log.d(TAG, "QRZ status error: " + e.getClass().getSimpleName());
             return false;
         }
     }
@@ -200,17 +196,16 @@ public class ThirdPartyService {
     public static void UploadToQRZ(QSLRecord qslRecord){
         // Convert to ADIF format
         String logStr = QSLRecordToADIF(qslRecord, ServiceType.QRZ);
-        Log.d(TAG,logStr);
         String apikey = GeneralVariables.getQrzApiKey();
-        HashMap<String,String> json = new HashMap<>();
-
-        String url = String.format("https://logbook.qrz.com/api/KEY=%s&ACTION=INSERT&ADIF=%s",apikey,logStr);
-
         try {
-            String result = sendGetRequest(url);
-            Log.d(TAG,"Updated to QRZ successfully. result:" + result);
+            // POST keeps both the API key and the ADIF payload out of the URL.
+            String body = "KEY=" + URLEncoder.encode(apikey, StandardCharsets.UTF_8.name())
+                    + "&ACTION=INSERT"
+                    + "&ADIF=" + URLEncoder.encode(logStr, StandardCharsets.UTF_8.name());
+            String result = sendPostFormRequest("https://logbook.qrz.com/api", body);
+            Log.d(TAG, "QRZ upload " + (result != null ? "succeeded" : "failed"));
         }catch (Exception k){
-            Log.d(TAG, k.toString());
+            Log.d(TAG, "QRZ upload error: " + k.getClass().getSimpleName());
         }
     }
 
@@ -255,6 +250,44 @@ public class ThirdPartyService {
 
         return null;
     }
+    public static String sendPostFormRequest(String url, String formBody) throws IOException {
+        HttpURLConnection conn = null;
+        BufferedReader reader = null;
+        try {
+            URL urlObj = new URL(url);
+            conn = (HttpURLConnection) urlObj.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            conn.setDoOutput(true);
+
+            OutputStream os = conn.getOutputStream();
+            os.write(formBody.getBytes(StandardCharsets.UTF_8));
+            os.flush();
+            os.close();
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK
+                    || responseCode == HttpURLConnection.HTTP_CREATED) {
+                reader = new BufferedReader(new InputStreamReader(conn.getInputStream(),
+                        StandardCharsets.UTF_8));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                return response.toString();
+            }
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+            if (reader != null) {
+                reader.close();
+            }
+        }
+        return null;
+    }
+
     public static String sendGetRequest(String url) throws IOException {
         HttpURLConnection conn = null;
         BufferedReader reader = null;
