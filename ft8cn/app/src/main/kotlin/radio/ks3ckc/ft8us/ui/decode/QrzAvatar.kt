@@ -21,15 +21,17 @@ import androidx.compose.ui.text.font.FontWeight
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
+import radio.ks3ckc.ft8us.qrz.QrzWebClient
 import radio.ks3ckc.ft8us.qrz.QrzXmlClient
 import radio.ks3ckc.ft8us.theme.Accent
 import radio.ks3ckc.ft8us.theme.BgElev
 import radio.ks3ckc.ft8us.theme.GeistMonoFamily
 
 /**
- * Circular avatar for a callsign. Tries to fetch a QRZ profile image; on any
- * failure (no creds, no network, callsign not found, no XML subscription),
- * falls back to a two-letter initials chip.
+ * Circular avatar for a callsign. Resolves the profile photo via the
+ * public QRZ profile page (works for free QRZ accounts); falls back to
+ * the XML API when configured, and finally to a two-letter initials
+ * chip when no image is available.
  */
 @Composable
 fun QrzAvatar(
@@ -41,7 +43,11 @@ fun QrzAvatar(
     val context = LocalContext.current
 
     LaunchedEffect(callsign) {
-        imageUrl = QrzXmlClient.lookup(callsign)?.imageUrl
+        // Public profile page works for any account (no subscription
+        // required). If it doesn't return anything, try the XML API as a
+        // secondary path for users with a QRZ XML subscription configured.
+        imageUrl = QrzWebClient.fetchProfileImage(callsign)
+            ?: QrzXmlClient.lookup(callsign)?.imageUrl
     }
 
     Box(

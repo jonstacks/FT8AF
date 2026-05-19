@@ -514,6 +514,7 @@ fun SettingsScreen(
                 // Drop cached lookups so retries don't return stale nulls
                 // from earlier failed attempts.
                 radio.ks3ckc.ft8us.qrz.QrzXmlClient.clearCache()
+                radio.ks3ckc.ft8us.qrz.QrzWebClient.clearCache()
                 showQrzCreds = false
             },
         )
