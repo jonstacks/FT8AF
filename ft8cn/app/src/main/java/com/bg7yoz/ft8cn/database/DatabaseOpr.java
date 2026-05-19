@@ -156,6 +156,12 @@ public class DatabaseOpr extends SQLiteOpenHelper {
      * @param sql       column definition SQL
      */
     private void alterTable(SQLiteDatabase db, String tableName, String fieldName, String sql) {
+        // Identifiers are interpolated into ALTER TABLE because SQLite cannot bind them; restrict
+        // to simple SQL identifiers so a stray caller can never inject statements.
+        if (!SQL_IDENTIFIER.matcher(tableName).matches()
+                || !SQL_IDENTIFIER.matcher(fieldName).matches()) {
+            throw new IllegalArgumentException("Invalid SQL identifier");
+        }
         Cursor cursor = db.rawQuery("select * from sqlite_master where name=? and sql like ?"
                 , new String[]{tableName, "%" + fieldName + "%"});
         if (!cursor.moveToNext()) {
@@ -163,6 +169,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         }
         cursor.close();
     }
+
+    private static final java.util.regex.Pattern SQL_IDENTIFIER =
+            java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
     /**
      * Check if a table exists
