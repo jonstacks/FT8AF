@@ -1885,7 +1885,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             if (!showAll){
                 limitStr="limit 100 offset "+offset;
             }
-            String querySQL = "select q.[call] as callsign ,q.gridsquare as grid" +
+            String querySQL = "select max(q.id) as id, q.[call] as callsign ,q.gridsquare as grid" +
                     ",q.band||\"(\"||q.freq||\" MHz)\" as band \n" +
                     ",q.qso_date as last_time ,q.mode ,q.isQSL,q.isLotW_QSL\n" +
                     "from QSLTable q inner join QSLTable q2 ON q.id =q2.id \n" +
@@ -1902,6 +1902,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             ArrayList<QSLCallsignRecord> records = new ArrayList<>();
             while (cursor.moveToNext()) {
                 QSLCallsignRecord record = new QSLCallsignRecord();
+                record.id = cursor.getInt(cursor.getColumnIndex("id"));
                 record.setCallsign(cursor.getString(cursor.getColumnIndex("callsign")));
                 record.isQSL = cursor.getInt(cursor.getColumnIndex("isQSL")) == 1;
                 record.isLotW_QSL = cursor.getInt(cursor.getColumnIndex("isLotW_QSL")) == 1;

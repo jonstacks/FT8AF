@@ -6,6 +6,10 @@ package com.bg7yoz.ft8cn.log;
  * @date 2023-03-20
  */
 public class QSLCallsignRecord {
+    // QSLTable.id of a representative underlying QSO row for this grouped record.
+    // Populated by GetQLSCallsignByCallsign so callers (e.g. logbook edit/delete UI)
+    // can identify the row in QSLTable. 0 means "no id available".
+    public int id = 0;
     private String callsign;
     private String mode;
     private String grid;
