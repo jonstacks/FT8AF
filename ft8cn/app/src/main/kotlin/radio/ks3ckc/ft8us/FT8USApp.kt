@@ -105,6 +105,19 @@ fun FT8USApp(mainViewModel: MainViewModel) {
                 mainViewModel = mainViewModel,
                 expanded = qsoPanelExpanded,
                 onCollapse = { qsoPanelExpanded = false },
+                onReopenSheet = {
+                    // Switch to the Decode tab so the bottom sheet is visible,
+                    // then expand it (clears minimized flag, ensures a callsign
+                    // is bound to the current TX target).
+                    activeTab = FT8USTab.DECODE
+                    val target = mainViewModel.ft8TransmitSignal.mutableToCallsign.value?.callsign
+                    if (!target.isNullOrEmpty() && target != "CQ") {
+                        if (mainViewModel.qsoSheetCallsign.value != target) {
+                            mainViewModel.qsoSheetCallsign.postValue(target)
+                        }
+                    }
+                    mainViewModel.qsoSheetMinimized.postValue(false)
+                },
             )
 
             // TX status strip — always visible above tab bar

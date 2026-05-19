@@ -71,6 +71,7 @@ fun ActiveQsoPanel(
     mainViewModel: MainViewModel,
     expanded: Boolean,
     onCollapse: () -> Unit = {},
+    onReopenSheet: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val toCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
@@ -162,7 +163,8 @@ fun ActiveQsoPanel(
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            // Station header
+            // Station header. When a sheet exists but the user has
+            // minimized it, the header acts as the "reopen" affordance.
             StationHeader(
                 targetCallsign = when {
                     displayCallsign == null -> "Searching..."
@@ -170,6 +172,7 @@ fun ActiveQsoPanel(
                     else -> "Waiting for $displayCallsign"
                 },
                 snr = if (displayCallsign != null) toCallsign?.snr else null,
+                onClick = if (displayCallsign != null) onReopenSheet else null,
             )
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -200,9 +203,12 @@ fun ActiveQsoPanel(
 }
 
 @Composable
-private fun StationHeader(targetCallsign: String, snr: Int?) {
+private fun StationHeader(targetCallsign: String, snr: Int?, onClick: (() -> Unit)? = null) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -233,6 +239,15 @@ private fun StationHeader(targetCallsign: String, snr: Int?) {
                     fontFamily = GeistMonoFamily,
                 )
             }
+        }
+        if (onClick != null) {
+            Text(
+                text = "tap to view ↗",
+                color = Accent,
+                fontSize = 10.sp,
+                fontFamily = GeistMonoFamily,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }

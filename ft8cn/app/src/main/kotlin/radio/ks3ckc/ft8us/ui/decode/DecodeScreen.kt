@@ -57,29 +57,46 @@ fun DecodeScreen(
     val filterOptions = listOf("All", "CQ Calls", "New DXCC", "Needed", "For Me")
     var selectedFilter by rememberSaveable { mutableStateOf("All") }
 
-    // Bottom sheet state
-    var selectedMessage by remember { mutableStateOf<Ft8Message?>(null) }
-    var sheetVisible by remember { mutableStateOf(false) }
+    // Bottom-sheet state lives in the ViewModel so it survives navigation
+    // away from this screen during an active QSO.
+    val sheetCallsign by mainViewModel.qsoSheetCallsign.observeAsState()
+    val sheetMinimized by mainViewModel.qsoSheetMinimized.observeAsState(false)
 
-    // Auto-open sheet when our CQ is answered: a non-CQ toCallsign appears
-    // while activated. Mirrors the experience of tapping "Call" on a CQ row.
     val txToCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
     val txActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
+    val txFunctionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
+
+    // Auto-open the sheet when our CQ is answered.
     LaunchedEffect(txToCallsign?.callsign, txActivated) {
         val cs = txToCallsign?.callsign
-        if (txActivated && !cs.isNullOrEmpty() && cs != "CQ") {
-            val alreadyOpenForCs = sheetVisible &&
-                selectedMessage?.callsignFrom.equals(cs, ignoreCase = true)
-            if (!alreadyOpenForCs) {
-                val trigger = (messageList ?: arrayListOf())
-                    .lastOrNull { it.callsignFrom.equals(cs, ignoreCase = true) }
-                if (trigger != null) {
-                    selectedMessage = trigger
-                    sheetVisible = true
-                }
-            }
+        if (txActivated && !cs.isNullOrEmpty() && cs != "CQ" && sheetCallsign != cs) {
+            mainViewModel.qsoSheetCallsign.postValue(cs)
+            mainViewModel.qsoSheetMinimized.postValue(false)
         }
     }
+
+    // Linger then clear: when the operator reaches the final TX
+    // (functionOrder == 5, sending 73) leave the sheet up for a few
+    // seconds so the operator can register completion, then clear it.
+    // STOP-deactivations don't trigger this — the sheet stays put until
+    // the user slides it down, matching their expectation that pressing
+    // STOP only halts TX.
+    LaunchedEffect(txFunctionOrder, sheetCallsign) {
+        if (sheetCallsign != null && txFunctionOrder == 5) {
+            kotlinx.coroutines.delay(5000)
+            mainViewModel.qsoSheetCallsign.postValue(null)
+            mainViewModel.qsoSheetMinimized.postValue(false)
+        }
+    }
+
+    // The message bound to the current sheet (latest decode from that
+    // callsign). Recomputes when the decode list updates.
+    val selectedMessage: Ft8Message? = remember(sheetCallsign, messageList, messageList?.size) {
+        val cs = sheetCallsign ?: return@remember null
+        (messageList ?: arrayListOf())
+            .lastOrNull { it.callsignFrom.equals(cs, ignoreCase = true) }
+    }
+    val sheetVisible = sheetCallsign != null && !sheetMinimized && selectedMessage != null
 
     // Take a snapshot of the list for stable rendering (ArrayList is mutable)
     val messages: List<Ft8Message> = remember(messageList, messageList?.size) {
@@ -179,8 +196,8 @@ fun DecodeScreen(
                             animateEntry = rowKey in newKeys,
                             nowMillis = utcTime,
                             onClick = {
-                                selectedMessage = message
-                                sheetVisible = true
+                                mainViewModel.qsoSheetCallsign.postValue(message.callsignFrom)
+                                mainViewModel.qsoSheetMinimized.postValue(false)
                             },
                         )
                     }
@@ -188,12 +205,21 @@ fun DecodeScreen(
             }
         }
 
-        // QSO bottom sheet (overlays on top)
+        // QSO bottom sheet (overlays on top). Slide-down minimizes when a
+        // QSO is active so the user can reopen via the ActiveQsoPanel; when
+        // no QSO is active, dismiss fully so future row taps start fresh.
         QsoSheet(
             message = selectedMessage,
             mainViewModel = mainViewModel,
             visible = sheetVisible,
-            onDismiss = { sheetVisible = false },
+            onDismiss = {
+                if (txActivated) {
+                    mainViewModel.qsoSheetMinimized.postValue(true)
+                } else {
+                    mainViewModel.qsoSheetCallsign.postValue(null)
+                    mainViewModel.qsoSheetMinimized.postValue(false)
+                }
+            },
         )
     }
 }
