@@ -72,6 +72,7 @@ import radio.ks3ckc.ft8us.ui.components.ShimmerBox
 import radio.ks3ckc.ft8us.ui.components.StatusPill
 import radio.ks3ckc.ft8us.ui.components.TopBar
 import radio.ks3ckc.ft8us.ui.components.TopBarSubtitle
+import radio.ks3ckc.ft8us.ui.decode.UsStateLookup
 import kotlin.coroutines.resume
 
 // ---------------------------------------------------------------------------
@@ -916,11 +917,25 @@ private fun QsoRow(record: QSLCallsignRecord) {
     val band = record.band ?: ""
     val time = record.lastTime ?: ""
     val dxcc = record.dxccStr ?: ""
+    val context = LocalContext.current
+    val state = UsStateLookup.stateFromGrid(context, grid)
 
     val status = when {
         record.isLotW_QSL -> QsoStatus.CONFIRMED
         record.isQSL -> QsoStatus.WORKED
         else -> QsoStatus.PENDING
+    }
+
+    // Build the secondary line entries (state takes precedence over DXCC when present
+    // because for US contacts the DXCC string is always just "United States" and the
+    // state is the more useful information).
+    val secondaryParts = buildList {
+        if (grid.isNotBlank()) add(grid to Signal)
+        if (!state.isNullOrBlank()) {
+            add("$state, USA" to TextMuted)
+        } else if (dxcc.isNotBlank()) {
+            add(dxcc to TextFaint)
+        }
     }
 
     GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -953,7 +968,7 @@ private fun QsoRow(record: QSLCallsignRecord) {
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Callsign + grid + DX entity
+            // Callsign + grid + state/DX entity
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = callsign,
@@ -965,19 +980,12 @@ private fun QsoRow(record: QSLCallsignRecord) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (grid.isNotBlank()) {
+                    secondaryParts.forEach { (text, color) ->
                         Text(
-                            text = grid,
-                            color = Signal,
+                            text = text,
+                            color = color,
                             fontSize = 10.sp,
                             fontFamily = GeistMonoFamily,
-                        )
-                    }
-                    if (dxcc.isNotBlank()) {
-                        Text(
-                            text = dxcc,
-                            color = TextFaint,
-                            fontSize = 10.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
