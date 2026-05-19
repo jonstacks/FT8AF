@@ -7,6 +7,7 @@ package com.bg7yoz.ft8cn;
 
 import android.annotation.SuppressLint;
 import android.os.Bundle;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -22,8 +23,15 @@ public class FAQActivity extends AppCompatActivity {
 
 
         WebView webView = (WebView) findViewById(R.id.faqWebView);
-        webView.getSettings().setJavaScriptEnabled(true);
-        webView.getSettings().setDomStorageEnabled(true);       // This needs to be enabled
+        WebSettings faqSettings = webView.getSettings();
+        faqSettings.setJavaScriptEnabled(true);
+        faqSettings.setDomStorageEnabled(true);       // This needs to be enabled
+        // Block local file / content URI access so a compromised support.qq.com page
+        // can't read app cache or FileProvider contents via the WebView.
+        faqSettings.setAllowFileAccess(false);
+        faqSettings.setAllowContentAccess(false);
+        faqSettings.setAllowFileAccessFromFileURLs(false);
+        faqSettings.setAllowUniversalAccessFromFileURLs(false);
 
         /* Get the webview url. Note the word is "product" not "products"; "products" is an old parameter and using the wrong address will prevent successful submission */
         //String url = "https://www.qrz.com/db/BG7YOZ";
