@@ -1,5 +1,6 @@
 package radio.ks3ckc.ft8us.qrz
 
+import android.util.Log
 import com.bg7yoz.ft8cn.GeneralVariables
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -7,22 +8,33 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
-import java.io.OutputStream
+import java.io.File
+import java.io.FileWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * Lightweight client for the QRZ XML callsign API (xmldata.qrz.com).
- * - Holds an in-memory session key; re-authenticates on demand.
- * - Caches per-callsign lookups in-memory so repeated UI recompositions
- *   don't refetch.
- * - Never throws to callers: any failure (missing creds, no XML
- *   subscription, network down, callsign not found) resolves as null.
+ * Client for the QRZ XML callsign API (xmldata.qrz.com).
+ *
+ * Spec: https://www.qrz.com/XML/current_spec.html — GET requests with
+ * `;`-separated query parameters, e.g.:
+ *   https://xmldata.qrz.com/xml/current/?username=USER;password=PASS;agent=APP
+ *   https://xmldata.qrz.com/xml/current/?s=SESSION;callsign=W5XO
+ *
+ * Holds an in-memory session key (re-auths on expiry) and a per-callsign
+ * LRU cache. All failures (no creds, bad creds, no XML subscription,
+ * network down, callsign not found) surface as null to callers; the
+ * most recent diagnostic is stored in `lastError`.
  */
 object QrzXmlClient {
+    private const val TAG = "QrzXmlClient"
     private const val BASE_URL = "https://xmldata.qrz.com/xml/current/"
+    private const val AGENT = "ft8af-1.0"
     private const val CACHE_MAX = 200
 
     private val sessionMutex = Mutex()
@@ -31,7 +43,25 @@ object QrzXmlClient {
     private val cacheMutex = Mutex()
     private val cache = LinkedHashMap<String, QrzLookup>(16, 0.75f, true)
 
+    @Volatile var lastError: String? = null
+        private set
+
     data class QrzLookup(val imageUrl: String?)
+
+    /**
+     * Test the configured credentials. Returns a human-readable status
+     * suitable for surfacing in the Settings UI: "OK" on success,
+     * otherwise a short message like "Username/password incorrect".
+     */
+    suspend fun testConnection(): String = withContext(Dispatchers.IO) {
+        val user = GeneralVariables.qrzXmlUsername.orEmpty()
+        val pass = GeneralVariables.qrzXmlPassword.orEmpty()
+        if (user.isEmpty() || pass.isEmpty()) return@withContext "Missing username or password"
+
+        sessionMutex.withLock { sessionKey = null }
+        val key = ensureSession(user, pass)
+        if (key != null) "OK" else (lastError ?: "Auth failed")
+    }
 
     suspend fun lookup(callsign: String): QrzLookup? = withContext(Dispatchers.IO) {
         val key = callsign.trim().uppercase()
@@ -41,23 +71,30 @@ object QrzXmlClient {
 
         val user = GeneralVariables.qrzXmlUsername.orEmpty()
         val pass = GeneralVariables.qrzXmlPassword.orEmpty()
-        if (user.isEmpty() || pass.isEmpty()) return@withContext null
+        if (user.isEmpty() || pass.isEmpty()) {
+            lastError = "QRZ XML credentials not configured"
+            log("lookup($key) skipped: no creds")
+            return@withContext null
+        }
 
         var session = ensureSession(user, pass) ?: return@withContext null
-        var xml = fetch("s=$session&callsign=${urlEncode(key)}") ?: return@withContext null
+        var xml = fetch("s=$session;callsign=${urlEncode(key)}") ?: return@withContext null
 
-        // QRZ returns an Error message with "Invalid session key" or similar when
-        // the session expires; reauth once and retry before giving up.
-        if (xml.contains("Invalid session", ignoreCase = true) ||
-            xml.contains("Session Timeout", ignoreCase = true)
-        ) {
+        if (looksLikeInvalidSession(xml)) {
+            log("session invalidated, re-authenticating")
             sessionMutex.withLock { sessionKey = null }
             session = ensureSession(user, pass) ?: return@withContext null
-            xml = fetch("s=$session&callsign=${urlEncode(key)}") ?: return@withContext null
+            xml = fetch("s=$session;callsign=${urlEncode(key)}") ?: return@withContext null
+        }
+
+        parseTag(xml, "Error")?.let {
+            lastError = it
+            log("lookup($key) error: $it")
         }
 
         val image = parseTag(xml, "image")
         val result = QrzLookup(imageUrl = image)
+        log("lookup($key) -> imageUrl=${image ?: "<none>"}")
         cacheMutex.withLock {
             cache[key] = result
             while (cache.size > CACHE_MAX) {
@@ -72,35 +109,49 @@ object QrzXmlClient {
         sessionMutex.withLock {
             sessionKey?.let { return it }
         }
-        val body =
-            "username=${urlEncode(user)};password=${urlEncode(pass)};agent=ft8us-1.0"
-        val xml = fetchRaw(body) ?: return null
-        val key = parseTag(xml, "Key") ?: return null
+        val query = "username=${urlEncode(user)};password=${urlEncode(pass)};agent=$AGENT"
+        val xml = fetch(query) ?: run {
+            log("auth: no response (network error)")
+            return null
+        }
+        val key = parseTag(xml, "Key")
+        if (key.isNullOrEmpty()) {
+            val err = parseTag(xml, "Error") ?: "unknown auth error"
+            lastError = err
+            log("auth failed: $err")
+            return null
+        }
         sessionMutex.withLock { sessionKey = key }
+        lastError = null
+        log("auth ok (session acquired)")
         return key
     }
 
-    private fun fetch(body: String): String? = fetchRaw(body)
+    private fun looksLikeInvalidSession(xml: String): Boolean {
+        val err = parseTag(xml, "Error") ?: return false
+        return err.contains("Invalid session", ignoreCase = true) ||
+            err.contains("Session Timeout", ignoreCase = true)
+    }
 
-    private fun fetchRaw(body: String): String? {
+    /** GET https://xmldata.qrz.com/xml/current/?<query>. Returns body or null on transport failure. */
+    private fun fetch(query: String): String? {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(BASE_URL).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                doOutput = true
+            val url = URL("$BASE_URL?$query")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
                 connectTimeout = 8000
                 readTimeout = 8000
-                setRequestProperty(
-                    "Content-Type",
-                    "application/x-www-form-urlencoded;charset=UTF-8",
-                )
+                setRequestProperty("User-Agent", AGENT)
             }
-            val out: OutputStream = conn.outputStream
-            out.write(body.toByteArray(StandardCharsets.UTF_8))
-            out.close()
-            if (conn.responseCode != HttpURLConnection.HTTP_OK) return null
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                log("http $code from QRZ")
+                return null
+            }
             conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            log("transport error: ${e.javaClass.simpleName}: ${e.message ?: "?"}")
             null
         } finally {
             conn?.disconnect()
@@ -128,4 +179,17 @@ object QrzXmlClient {
 
     private fun urlEncode(s: String): String =
         URLEncoder.encode(s, StandardCharsets.UTF_8.name())
+
+    private fun log(msg: String) {
+        Log.d(TAG, msg)
+        try {
+            val ctx = GeneralVariables.getMainContext() ?: return
+            val dir = ctx.getExternalFilesDir(null) ?: return
+            val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+            FileWriter(File(dir, "debug.log"), true).use {
+                it.append("$ts QrzXml: $msg\n")
+            }
+        } catch (_: Exception) {
+        }
+    }
 }

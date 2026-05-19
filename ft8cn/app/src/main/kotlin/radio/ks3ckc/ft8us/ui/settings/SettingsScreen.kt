@@ -1366,6 +1366,9 @@ private fun QrzCredsDialog(
 ) {
     var userInput by remember { mutableStateOf(TextFieldValue(initialUsername)) }
     var passInput by remember { mutableStateOf(TextFieldValue(initialPassword)) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var isTesting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = TextPrimary,
@@ -1401,7 +1404,7 @@ private fun QrzCredsDialog(
 
             OutlinedTextField(
                 value = userInput,
-                onValueChange = { userInput = it },
+                onValueChange = { userInput = it; testResult = null },
                 label = { Text("Username") },
                 placeholder = { Text("Your QRZ.com username", color = TextFaint) },
                 singleLine = true,
@@ -1412,7 +1415,7 @@ private fun QrzCredsDialog(
 
             OutlinedTextField(
                 value = passInput,
-                onValueChange = { passInput = it },
+                onValueChange = { passInput = it; testResult = null },
                 label = { Text("Password") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -1421,6 +1424,53 @@ private fun QrzCredsDialog(
                 textStyle = TextStyle(fontSize = 14.sp),
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            // Test Connection
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(
+                    onClick = {
+                        GeneralVariables.qrzXmlUsername = userInput.text.trim()
+                        GeneralVariables.qrzXmlPassword = passInput.text
+                        isTesting = true
+                        testResult = null
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                radio.ks3ckc.ft8us.qrz.QrzXmlClient.testConnection()
+                            }
+                            testResult = result
+                            isTesting = false
+                        }
+                    },
+                    enabled = !isTesting,
+                ) {
+                    Text(
+                        text = "Test Connection",
+                        color = if (isTesting) TextFaint else Accent,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (isTesting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .width(16.dp)
+                            .height(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Accent,
+                    )
+                }
+                if (testResult != null) {
+                    val ok = testResult == "OK"
+                    Text(
+                        text = if (ok) "Pass" else testResult!!,
+                        color = if (ok) StatusConfirmed else StatusBad,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
