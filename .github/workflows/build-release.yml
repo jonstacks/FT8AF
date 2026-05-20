@@ -12,7 +12,53 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Unit tests (PR only)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('ft8cn/**/*.gradle*', 'ft8cn/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}--
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ft8cn/gradlew
+
+      - name: Run unit tests
+        working-directory: ft8cn
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            ft8cn/app/build/reports/tests/
+            ft8cn/app/build/test-results/
+
   build:
+    name: Build APK
+    needs: test
+    # Run when tests pass (PR), or when tests were skipped (push to main/Dev/tags).
+    # Block only on actual test failure or cancellation.
+    if: ${{ always() && needs.test.result != 'failure' && needs.test.result != 'cancelled' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -71,19 +117,6 @@ jobs:
 
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
-
-      - name: Run unit tests
-        working-directory: ft8cn
-        run: ./gradlew testDebugUnitTest --stacktrace
-
-      - name: Upload test reports on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-reports
-          path: |
-            ft8cn/app/build/reports/tests/
-            ft8cn/app/build/test-results/
 
       - name: Build APK
         working-directory: ft8cn
