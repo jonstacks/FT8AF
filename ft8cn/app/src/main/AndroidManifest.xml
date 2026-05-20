@@ -77,7 +77,7 @@
 
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.bg7yoz.ft8cn.fileprovider"
+            android:authorities="radio.ks3ckc.ft8af.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
