@@ -133,6 +133,7 @@ fun FT8USApp(mainViewModel: MainViewModel) {
                     } else {
                         mainViewModel.ft8TransmitSignal.userResetToCQ()
                         mainViewModel.ft8TransmitSignal.setActivated(true)
+                        GeneralVariables.resetLaunchSupervision()
                     }
                 },
                 onStop = {
