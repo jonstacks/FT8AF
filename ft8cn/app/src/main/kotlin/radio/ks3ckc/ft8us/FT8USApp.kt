@@ -131,7 +131,7 @@ fun FT8USApp(mainViewModel: MainViewModel) {
                     if (GeneralVariables.myCallsign.isNullOrEmpty()) {
                         Toast.makeText(context, "Set your callsign in Settings before calling CQ", Toast.LENGTH_SHORT).show()
                     } else {
-                        mainViewModel.ft8TransmitSignal.resetToCQ()
+                        mainViewModel.ft8TransmitSignal.userResetToCQ()
                         mainViewModel.ft8TransmitSignal.setActivated(true)
                     }
                 },

@@ -55,6 +55,7 @@ public class FT8TransmitSignal {
     public MutableLiveData<Boolean> mutableIsActivated = new MutableLiveData<>();
     public volatile int sequential;// transmit sequence
     public MutableLiveData<Integer> mutableSequential = new MutableLiveData<>();
+    private volatile boolean pendingUserCQ = false;
     private volatile boolean isTransmitting = false;
     public MutableLiveData<Boolean> mutableIsTransmitting = new MutableLiveData<>();// whether currently transmitting
     public MutableLiveData<String> mutableTransmittingMessage = new MutableLiveData<>();// current message content
@@ -1001,7 +1002,7 @@ public class FT8TransmitSignal {
 
         // at this point I am not yet in message 6 state; check if anyone is calling me
         // 2022-09-22 if someone is calling me or auto-follow is active, set up a new transmit message list
-        if (checkCQMeOrFollowCQMessage(messages)) {
+        if (!pendingUserCQ && checkCQMeOrFollowCQMessage(messages)) {
             return;
         }
 
@@ -1009,7 +1010,9 @@ public class FT8TransmitSignal {
         // at this point, no reply messages were received
         // if I am in CQ state, newOrder must be -1
         if (functionOrder == 6) {// I am in CQ state
-            if (!dequeueNextCaller()) {
+            if (pendingUserCQ) {
+                pendingUserCQ = false;
+            } else if (!dequeueNextCaller()) {
                 checkCQMeOrFollowCQMessage(messages);
             }
             return;
@@ -1161,6 +1164,17 @@ public class FT8TransmitSignal {
             mutableToCallsign.postValue(toCallsign);// set the call target
             generateFun();
         }
+    }
+
+    /**
+     * Called when the user explicitly presses CQ. Clears the caller queue and
+     * sets a flag so that the first decode cycle after pressing CQ will not
+     * auto-follow or dequeue — the CQ message transmits cleanly first.
+     */
+    public void userResetToCQ() {
+        resetToCQ();
+        clearCallerQueue();
+        pendingUserCQ = true;
     }
 
     // ==================== Caller Queue Methods ====================
