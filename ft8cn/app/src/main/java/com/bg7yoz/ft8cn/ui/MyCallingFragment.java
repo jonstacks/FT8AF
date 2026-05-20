@@ -385,7 +385,7 @@ public class MyCallingFragment extends Fragment {
             //@RequiresApi(api = Build.VERSION_CODES.N)
             @Override
             public void onClick(View view) {
-                mainViewModel.ft8TransmitSignal.resetToCQ();
+                mainViewModel.ft8TransmitSignal.userResetToCQ();
                 GeneralVariables.resetLaunchSupervision();//Reset automatic supervision
             }
         });
