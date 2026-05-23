@@ -26,6 +26,7 @@ import radio.ks3ckc.ft8us.ui.components.FT8USTab
 import radio.ks3ckc.ft8us.ui.components.FrequencyPickerSheet
 import radio.ks3ckc.ft8us.ui.components.formatMhz
 import radio.ks3ckc.ft8us.ui.components.QsoCelebration
+import radio.ks3ckc.ft8us.ui.components.SlotTimerBar
 import radio.ks3ckc.ft8us.ui.components.TabBar
 import radio.ks3ckc.ft8us.ui.components.TransmitGlow
 import radio.ks3ckc.ft8us.ui.components.TxStrip
@@ -118,6 +119,12 @@ fun FT8USApp(mainViewModel: MainViewModel) {
                     }
                     mainViewModel.qsoSheetMinimized.postValue(false)
                 },
+            )
+
+            // Slot timer bar — fills 0→100% across each 15s FT8 slot
+            SlotTimerBar(
+                activeTxSlot = txSlot,
+                isActivated = isActivated,
             )
 
             // TX status strip — always visible above tab bar
