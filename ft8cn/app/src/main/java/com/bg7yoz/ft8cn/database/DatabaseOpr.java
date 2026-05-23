@@ -1973,6 +1973,21 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             }
             cursor.close();
             GeneralVariables.QSL_Callsign_list_other_band = other_callsigns;
+
+            // Load distinct 4-char worked grids (any band) into in-memory set
+            querySQL = "select distinct upper(substr(gridsquare,1,4)) as g from QSLTable" +
+                    " where gridsquare is not null and length(gridsquare) >= 4";
+            cursor = db.rawQuery(querySQL, null);
+            java.util.HashSet<String> grids = new java.util.HashSet<>();
+            while (cursor.moveToNext()) {
+                @SuppressLint("Range")
+                String g = cursor.getString(cursor.getColumnIndex("g"));
+                if (g != null && g.length() >= 4) {
+                    grids.add(g);
+                }
+            }
+            cursor.close();
+            GeneralVariables.QSL_Grid_list = grids;
         }
 
     }

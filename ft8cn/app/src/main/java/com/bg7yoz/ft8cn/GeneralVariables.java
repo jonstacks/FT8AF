@@ -24,6 +24,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -224,6 +225,7 @@ public class GeneralVariables {
     public static boolean autoUpdateGridFromGPS = false;//Use device GPS to keep Maidenhead grid current
     public static ArrayList<String> QSL_Callsign_list = new ArrayList<>();//Successfully QSL'd callsigns
     public static ArrayList<String> QSL_Callsign_list_other_band = new ArrayList<>();//Successfully QSL'd callsigns on other bands
+    public static HashSet<String> QSL_Grid_list = new HashSet<>();//Distinct worked 4-char Maidenhead grids (any band)
 
 
     public static final ArrayList<String> followCallsign = new ArrayList<>();//Followed callsigns
@@ -309,6 +311,15 @@ public class GeneralVariables {
      */
     public static boolean checkQSLCallsign_OtherBand(String callsign) {
         return QSL_Callsign_list_other_band.contains(callsign);
+    }
+
+    /**
+     * Check if a 4-character Maidenhead grid has been previously worked (any band).
+     * Caller should pass the first 4 characters upper-cased.
+     */
+    public static boolean checkQSLGrid(String grid) {
+        if (grid == null || grid.length() < 4) return false;
+        return QSL_Grid_list.contains(grid.substring(0, 4).toUpperCase());
     }
 
     /**
