@@ -61,6 +61,7 @@ fun DecodeRow(
     modifier: Modifier = Modifier,
     animateEntry: Boolean = false,
     nowMillis: Long = 0L,
+    isTarget: Boolean = false,
 ) {
     val isCQ = message.checkIsCQ()
     val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
@@ -70,11 +71,13 @@ fun DecodeRow(
     // Background color based on message type
     val bgColor = when {
         isToMe -> Color(0x145CD6E8)   // cyan glow rgba(92,214,232,0.08)
+        isTarget -> TargetSoft         // pink — current call target's transmissions
         isCQ -> BgSurface              // surface card
         else -> Color.Transparent
     }
     val borderColor = when {
         isToMe -> Color(0x385CD6E8)   // rgba(92,214,232,0.22)
+        isTarget -> TargetBorder       // pink border for target rows
         isCQ -> Border
         else -> Color.Transparent
     }
@@ -110,13 +113,19 @@ fun DecodeRow(
             .padding(start = 0.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Left accent bar for CQ messages
-        if (isCQ) {
+        // Left accent bar — pink for the current call target, amber for CQ.
+        // Target wins because it's the more actionable signal for the operator.
+        val accentColor = when {
+            isTarget -> Target
+            isCQ -> Accent
+            else -> null
+        }
+        if (accentColor != null) {
             Box(
                 modifier = Modifier
                     .width(3.dp)
                     .height(52.dp)
-                    .background(Accent, RoundedCornerShape(99.dp))
+                    .background(accentColor, RoundedCornerShape(99.dp))
             )
             Spacer(modifier = Modifier.width(10.dp))
         } else {
@@ -130,7 +139,11 @@ fun DecodeRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // CQ or "TO YOU" label
+                // CALLING / TO YOU / CQ labels (can stack \u2014 e.g. target station
+                // calling CQ shows both CALLING and CQ).
+                if (isTarget) {
+                    MessageLabel(text = "\u2192 CALLING", color = Target, bgColor = TargetSoft)
+                }
                 if (isCQ) {
                     MessageLabel(text = "CQ", color = Accent, bgColor = AccentSoft)
                 } else if (isToMe) {
@@ -140,7 +153,11 @@ fun DecodeRow(
                 // Callsign
                 Text(
                     text = message.callsignFrom ?: "",
-                    color = if (isToMe) Signal else TextPrimary,
+                    color = when {
+                        isToMe -> Signal
+                        isTarget -> Target
+                        else -> TextPrimary
+                    },
                     fontFamily = GeistMonoFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,

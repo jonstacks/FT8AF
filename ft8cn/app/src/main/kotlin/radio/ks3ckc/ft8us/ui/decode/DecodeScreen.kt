@@ -207,10 +207,20 @@ fun DecodeScreen(
                             TimeGroupDivider(utcTime = message.utcTime)
                         }
 
+                        // Target highlight: this row is from the station the
+                        // operator is currently calling. Ignore the idle "CQ"
+                        // sentinel that lives in txToCallsign between QSOs.
+                        val targetCs = txToCallsign?.callsign?.takeIf {
+                            it.isNotEmpty() && !it.equals("CQ", ignoreCase = true)
+                        }
+                        val isTarget = targetCs != null &&
+                            message.callsignFrom?.equals(targetCs, ignoreCase = true) == true
+
                         DecodeRow(
                             message = message,
                             animateEntry = rowKey in newKeys,
                             nowMillis = utcTime,
+                            isTarget = isTarget,
                             onClick = {
                                 mainViewModel.qsoSheetCallsign.postValue(message.callsignFrom)
                                 mainViewModel.qsoSheetMinimized.postValue(false)
