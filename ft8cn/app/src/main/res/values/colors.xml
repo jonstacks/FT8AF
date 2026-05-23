@@ -178,5 +178,11 @@
     <color name="char_bar_15">#770A8F</color>
     <color name="char_bar_16">#61024D</color>
 
+    <!-- Worked-before highlighting (CallingList row left-edge stripe) -->
+    <color name="stripe_new_dxcc">#FFFF3A3A</color>
+    <color name="stripe_new_grid">#FFFF8C00</color>
+    <color name="stripe_new_band">#FFFFC107</color>
+    <color name="stripe_worked">#80808080</color>
+    <color name="stripe_none">#00000000</color>
 
 </resources>
