@@ -335,6 +335,19 @@ public class MainViewModel extends ViewModel {
                     , ArrayList<Ft8Message> messages, boolean isDeep) {
                 if (messages.size() == 0) return;//no messages decoded, don't trigger action
 
+                // Diagnostic: log every CQ message so we can see what the JNI decoder
+                // populates for "CQ DX" / "CQ POTA" style broadcasts.
+                for (Ft8Message m : messages) {
+                    if (m.checkIsCQ()) {
+                        fileLog(String.format(
+                                "CQ_DEBUG i3=%d n3=%d to=[%s] from=[%s] extra=[%s] modifier=[%s] msgText=[%s]",
+                                m.i3, m.n3,
+                                m.callsignTo, m.callsignFrom, m.extraInfo,
+                                m.modifier == null ? "null" : m.modifier,
+                                m.getMessageText()));
+                    }
+                }
+
                 synchronized (ft8Messages) {
                     ft8Messages.addAll(messages);//add messages to list
                 }
