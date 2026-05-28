@@ -118,18 +118,43 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
 
-      - name: Build APK
+      - name: Decode keystore (release builds only)
+        if: steps.tag.outputs.should_release == 'true'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build APK & AAB
         working-directory: ft8cn
-        run: ./gradlew assembleRelease
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          args=(assembleRelease)
+          # Sign + produce AAB only on release builds — PR builds stay unsigned
+          # because the keystore secret isn't available (and shouldn't be) for
+          # fork PRs.
+          if [[ -n "${RELEASE_STORE_FILE:-}" ]]; then
+            args+=(bundleRelease \
+              "-PRELEASE_STORE_FILE=$RELEASE_STORE_FILE" \
+              "-PRELEASE_STORE_PASSWORD=$RELEASE_STORE_PASSWORD" \
+              "-PRELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS" \
+              "-PRELEASE_KEY_PASSWORD=$RELEASE_KEY_PASSWORD")
+          fi
+          ./gradlew "${args[@]}"
 
       - name: Rename APK
         if: steps.tag.outputs.should_release == 'true'
         run: |
           set -euo pipefail
           cd ft8cn/app/build/outputs/apk/release
-          # No signing config is wired up (see app/build.gradle:46), so the
-          # release task emits app-release-unsigned.apk. Handle either name so
-          # adding RELEASE_STORE_FILE later will Just Work.
+          # Signed builds emit app-release.apk; unsigned emit app-release-unsigned.apk.
+          # Keep the fallback so the rename works either way.
           if [[ -f app-release.apk ]]; then
             src=app-release.apk
           elif [[ -f app-release-unsigned.apk ]]; then
@@ -147,6 +172,13 @@ jobs:
           name: ft8cn-release
           path: ft8cn/app/build/outputs/apk/release/*.apk
 
+      - name: Upload AAB artifact
+        if: steps.tag.outputs.should_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ft8cn-release-aab
+          path: ft8cn/app/build/outputs/bundle/release/*.aab
+
       - name: Create GitHub Release
         if: steps.tag.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
@@ -161,3 +193,14 @@ jobs:
             Vibecoded with spite on I-70 enroute to Dayton Hamvention.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish AAB to Play Internal track
+        if: steps.tag.outputs.should_release == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: radio.ks3ckc.ft8af
+          releaseFiles: ft8cn/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+          releaseName: ${{ steps.tag.outputs.release_tag }}
