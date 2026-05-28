@@ -59,7 +59,7 @@ private data class QsoLogEntry(
     val messageText: String,
     val snr: Int? = null,
 ) {
-    enum class Direction { TX, RX }
+    enum class Direction { TX, RX, BUSY }
 }
 
 /**
@@ -135,13 +135,30 @@ fun ActiveQsoPanel(
             val from = msg.callsignFrom ?: ""
             val to = msg.callsignTo ?: ""
 
+            val fromIsTarget = from.equals(displayCallsign, ignoreCase = true)
+            val toIsMe = to.equals(myCallsign, ignoreCase = true) ||
+                GeneralVariables.checkIsMyCallsign(to)
+
             when {
                 // RX: target station calling us
-                from.equals(displayCallsign, ignoreCase = true) &&
-                        (to.equals(myCallsign, ignoreCase = true) || GeneralVariables.checkIsMyCallsign(to)) -> {
+                fromIsTarget && toIsMe -> {
                     entries.add(
                         QsoLogEntry(
                             direction = QsoLogEntry.Direction.RX,
+                            utcTime = msg.utcTime,
+                            messageText = msg.getMessageText() ?: "$from $to ${msg.extraInfo ?: ""}",
+                            snr = msg.snr,
+                        )
+                    )
+                }
+                // BUSY: target is transmitting but to someone else — useful so
+                // the hunter can see what their target is doing (calling CQ,
+                // exchanging reports with another station, etc.) instead of
+                // staring at an empty log wondering whether they're still on.
+                fromIsTarget && !toIsMe -> {
+                    entries.add(
+                        QsoLogEntry(
+                            direction = QsoLogEntry.Direction.BUSY,
                             utcTime = msg.utcTime,
                             messageText = msg.getMessageText() ?: "$from $to ${msg.extraInfo ?: ""}",
                             snr = msg.snr,
@@ -343,8 +360,20 @@ private fun MessageLogRow(entry: QsoLogEntry) {
     }
 
     val isTx = entry.direction == QsoLogEntry.Direction.TX
-    val dirColor = if (isTx) Accent else Signal
-    val dirLabel = if (isTx) "TX" else "RX"
+    val isBusy = entry.direction == QsoLogEntry.Direction.BUSY
+    val dirColor = when (entry.direction) {
+        QsoLogEntry.Direction.TX -> Accent
+        QsoLogEntry.Direction.RX -> Signal
+        QsoLogEntry.Direction.BUSY -> TextMuted
+    }
+    val dirLabel = when (entry.direction) {
+        QsoLogEntry.Direction.TX -> "TX"
+        QsoLogEntry.Direction.RX -> "RX"
+        QsoLogEntry.Direction.BUSY -> "BUSY"
+    }
+    // Dim the whole row when the target is talking to someone else — it's
+    // context, not part of our QSO.
+    val rowAlpha = if (isBusy) 0.6f else 1f
 
     Row(
         modifier = Modifier
@@ -356,13 +385,13 @@ private fun MessageLogRow(entry: QsoLogEntry) {
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(3.dp))
-                .background(dirColor.copy(alpha = 0.15f))
+                .background(dirColor.copy(alpha = 0.15f * rowAlpha))
                 .padding(horizontal = 4.dp, vertical = 1.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = dirLabel,
-                color = dirColor,
+                color = dirColor.copy(alpha = rowAlpha),
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = GeistMonoFamily,
@@ -374,7 +403,7 @@ private fun MessageLogRow(entry: QsoLogEntry) {
         // UTC time
         Text(
             text = timeStr,
-            color = TextFaint,
+            color = TextFaint.copy(alpha = rowAlpha),
             fontSize = 10.sp,
             fontFamily = GeistMonoFamily,
         )
@@ -384,17 +413,17 @@ private fun MessageLogRow(entry: QsoLogEntry) {
         // Message text
         Text(
             text = entry.messageText,
-            color = TextPrimary,
+            color = TextPrimary.copy(alpha = rowAlpha),
             fontSize = 11.sp,
             fontFamily = GeistMonoFamily,
             modifier = Modifier.weight(1f),
         )
 
-        // SNR for RX messages
+        // SNR for received messages (RX or BUSY)
         if (entry.snr != null && !isTx) {
             Text(
                 text = if (entry.snr >= 0) "+${entry.snr}" else "${entry.snr}",
-                color = Signal,
+                color = Signal.copy(alpha = rowAlpha),
                 fontSize = 10.sp,
                 fontFamily = GeistMonoFamily,
             )

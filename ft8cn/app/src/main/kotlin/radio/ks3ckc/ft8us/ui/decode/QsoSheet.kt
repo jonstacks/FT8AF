@@ -233,7 +233,7 @@ private fun QsoSheetContent(
 @Composable
 private fun StationHeader(
     callsign: String,
-    status: QsoStatus,
+    status: QsoStatus?,
     country: String?,
     state: String?,
     grid: String?,
@@ -264,7 +264,9 @@ private fun StationHeader(
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp,
                 )
-                StatusPill(status = status, compact = true)
+                if (status != null) {
+                    StatusPill(status = status, compact = true)
+                }
             }
 
             // Location info: combine state + country + grid into a single sentence
