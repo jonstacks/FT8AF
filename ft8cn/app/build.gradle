@@ -22,7 +22,14 @@ android {
         applicationId "radio.ks3ckc.ft8af"
         minSdk 23
         targetSdk 35
-        versionCode 4
+        // CI builds derive versionCode from GITHUB_RUN_NUMBER + offset, so each
+        // run gets a unique, monotonically increasing value Play Console will
+        // accept. Offset clears the manual-upload history (current max in
+        // internal track is 4). Local builds without the env var keep the
+        // static fallback so debug/release builds run unchanged from a dev
+        // machine.
+        def ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode ciRunNumber ? (ciRunNumber.toInteger() + 100) : 4
         versionName '1.0.2'
 
 
