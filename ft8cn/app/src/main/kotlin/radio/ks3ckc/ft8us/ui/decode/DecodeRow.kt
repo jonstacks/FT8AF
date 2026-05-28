@@ -186,7 +186,21 @@ fun DecodeRow(
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Full decoded message text (canonical FT8 frame, e.g. "K1ABC W9XYZ EN37"
+            // or "CQ POTA W1ABC FN42"). This is what was actually transmitted.
+            val msgText = message.getMessageText()?.trim().orEmpty()
+            if (msgText.isNotEmpty()) {
+                Text(
+                    text = msgText,
+                    color = TextMuted,
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 12.sp,
+                    letterSpacing = 0.02.sp,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
 
             // Metadata row: signal bar, SNR, frequency, distance, UTC time
             Row(
