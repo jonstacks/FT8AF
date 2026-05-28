@@ -61,20 +61,25 @@ fun DecodeRow(
     modifier: Modifier = Modifier,
     animateEntry: Boolean = false,
     nowMillis: Long = 0L,
+    isTarget: Boolean = false,
 ) {
     val isCQ = message.checkIsCQ()
     val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
-    val isWorked = message.isQSL_Callsign
+    // Dim rows that are clearly mid-QSO with a third party — they're noise
+    // when the operator is scanning for someone to call.
+    val isInQsoWithOther = !isCQ && !isToMe && !isTarget
     val shape = RoundedCornerShape(12.dp)
 
     // Background color based on message type
     val bgColor = when {
         isToMe -> Color(0x145CD6E8)   // cyan glow rgba(92,214,232,0.08)
+        isTarget -> TargetSoft         // pink — current call target's transmissions
         isCQ -> BgSurface              // surface card
         else -> Color.Transparent
     }
     val borderColor = when {
         isToMe -> Color(0x385CD6E8)   // rgba(92,214,232,0.22)
+        isTarget -> TargetBorder       // pink border for target rows
         isCQ -> Border
         else -> Color.Transparent
     }
@@ -99,7 +104,7 @@ fun DecodeRow(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer {
-                alpha = entryAnim.value
+                alpha = entryAnim.value * (if (isInQsoWithOther) 0.55f else 1f)
                 translationY = (1f - entryAnim.value) * -12f
             }
             .padding(horizontal = 12.dp, vertical = 3.dp)
@@ -110,13 +115,19 @@ fun DecodeRow(
             .padding(start = 0.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Left accent bar for CQ messages
-        if (isCQ) {
+        // Left accent bar — pink for the current call target, amber for CQ.
+        // Target wins because it's the more actionable signal for the operator.
+        val accentColor = when {
+            isTarget -> Target
+            isCQ -> Accent
+            else -> null
+        }
+        if (accentColor != null) {
             Box(
                 modifier = Modifier
                     .width(3.dp)
                     .height(52.dp)
-                    .background(Accent, RoundedCornerShape(99.dp))
+                    .background(accentColor, RoundedCornerShape(99.dp))
             )
             Spacer(modifier = Modifier.width(10.dp))
         } else {
@@ -130,7 +141,11 @@ fun DecodeRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // CQ or "TO YOU" label
+                // CALLING / TO YOU / CQ labels (can stack \u2014 e.g. target station
+                // calling CQ shows both CALLING and CQ).
+                if (isTarget) {
+                    MessageLabel(text = "\u2192 CALLING", color = Target, bgColor = TargetSoft)
+                }
                 if (isCQ) {
                     MessageLabel(text = "CQ", color = Accent, bgColor = AccentSoft)
                 } else if (isToMe) {
@@ -140,7 +155,11 @@ fun DecodeRow(
                 // Callsign
                 Text(
                     text = message.callsignFrom ?: "",
-                    color = if (isToMe) Signal else TextPrimary,
+                    color = when {
+                        isToMe -> Signal
+                        isTarget -> Target
+                        else -> TextPrimary
+                    },
                     fontFamily = GeistMonoFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
@@ -160,12 +179,28 @@ fun DecodeRow(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Status pill
+                // Status pill (skipped when there's no useful state to surface)
                 val status = resolveQsoStatus(message)
-                StatusPill(status = status, compact = true)
+                if (status != null) {
+                    StatusPill(status = status, compact = true)
+                }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Full decoded message text (canonical FT8 frame, e.g. "K1ABC W9XYZ EN37"
+            // or "CQ POTA W1ABC FN42"). This is what was actually transmitted.
+            val msgText = message.getMessageText()?.trim().orEmpty()
+            if (msgText.isNotEmpty()) {
+                Text(
+                    text = msgText,
+                    color = TextMuted,
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 12.sp,
+                    letterSpacing = 0.02.sp,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
 
             // Metadata row: signal bar, SNR, frequency, distance, UTC time
             Row(
@@ -286,17 +321,37 @@ private fun MetaText(text: String) {
 
 /**
  * Resolve the [QsoStatus] for a given [Ft8Message] based on its state.
+ *
+ * Returns null when there is no useful state to surface (e.g. a station
+ * mid-QSO with someone else who isn't new in any dimension) — the caller
+ * should skip rendering the pill in that case.
+ *
+ * Priority (highest first): calling me, POTA/SOTA activation, new DXCC,
+ * new grid, new band, plain CQ, already worked.
  */
-internal fun resolveQsoStatus(message: Ft8Message): QsoStatus {
+internal fun resolveQsoStatus(message: Ft8Message): QsoStatus? {
     val isCQ = message.checkIsCQ()
     val isWorked = message.isQSL_Callsign
+    val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
+    val modifier = message.modifier
+    val grid = message.maidenGrid
+
+    val newGrid = !grid.isNullOrEmpty() &&
+        grid.length >= 4 &&
+        !GeneralVariables.checkQSLGrid(grid)
+    val newBand = !isWorked &&
+        GeneralVariables.checkQSLCallsign_OtherBand(message.callsignFrom ?: "")
 
     return when {
-        isCQ && !isWorked -> QsoStatus.CQ
-        isCQ && isWorked -> QsoStatus.WORKED
-        GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "") -> QsoStatus.PENDING
+        isToMe -> QsoStatus.PENDING
+        isCQ && modifier == "POTA" -> QsoStatus.POTA
+        isCQ && modifier == "SOTA" -> QsoStatus.SOTA
+        message.fromDxcc -> QsoStatus.NEW
+        newGrid -> QsoStatus.NEW_GRID
+        newBand -> QsoStatus.NEW_BAND
         isWorked -> QsoStatus.WORKED
-        else -> QsoStatus.NEW
+        isCQ -> QsoStatus.CQ
+        else -> null
     }
 }
 

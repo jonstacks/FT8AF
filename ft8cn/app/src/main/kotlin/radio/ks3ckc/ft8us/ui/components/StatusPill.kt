@@ -33,6 +33,30 @@ enum class QsoStatus(
         Color(0x1FC084FC),  // rgba(192,132,252,0.12)
         Color(0x47C084FC),  // rgba(192,132,252,0.28)
     ),
+    NEW_GRID(
+        "NEW GRID",
+        StatusWarn,
+        Color(0x1FFACC15),  // rgba(250,204,21,0.12)
+        Color(0x47FACC15),  // rgba(250,204,21,0.28)
+    ),
+    NEW_BAND(
+        "NEW BAND",
+        Signal,
+        Color(0x1F5CD6E8),  // rgba(92,214,232,0.12)
+        Color(0x475CD6E8),  // rgba(92,214,232,0.28)
+    ),
+    POTA(
+        "POTA",
+        StatusConfirmed,
+        Color(0x1F4ADE80),  // rgba(74,222,128,0.12)
+        Color(0x474ADE80),  // rgba(74,222,128,0.28)
+    ),
+    SOTA(
+        "SOTA",
+        StatusConfirmed,
+        Color(0x1F4ADE80),
+        Color(0x474ADE80),
+    ),
     NEEDED(
         "NEEDED",
         StatusNeeded,

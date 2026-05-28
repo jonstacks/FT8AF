@@ -29,6 +29,13 @@ val AccentGlow = Color(0xFFFFD7A0)
 val Signal = Color(0xFF5CD6E8)
 val SignalSoft = Color(0x245CD6E8)   // rgba(92,214,232, 0.14)
 
+// Target — the station the operator is currently calling. Pink/magenta so it's
+// visually distinct from CQ (amber) and TO YOU (cyan); these often stack on a
+// single row during an active QSO.
+val Target = Color(0xFFF472B6)
+val TargetSoft = Color(0x24F472B6)   // rgba(244,114,182, 0.14)
+val TargetBorder = Color(0x47F472B6) // rgba(244,114,182, 0.28)
+
 // Status
 val StatusNew = Color(0xFFC084FC)
 val StatusNeeded = Color(0xFFFFAF5E)

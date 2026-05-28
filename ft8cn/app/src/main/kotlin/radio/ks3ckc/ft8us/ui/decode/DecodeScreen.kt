@@ -207,10 +207,20 @@ fun DecodeScreen(
                             TimeGroupDivider(utcTime = message.utcTime)
                         }
 
+                        // Target highlight: this row is from the station the
+                        // operator is currently calling. Ignore the idle "CQ"
+                        // sentinel that lives in txToCallsign between QSOs.
+                        val targetCs = txToCallsign?.callsign?.takeIf {
+                            it.isNotEmpty() && !it.equals("CQ", ignoreCase = true)
+                        }
+                        val isTarget = targetCs != null &&
+                            message.callsignFrom?.equals(targetCs, ignoreCase = true) == true
+
                         DecodeRow(
                             message = message,
                             animateEntry = rowKey in newKeys,
                             nowMillis = utcTime,
+                            isTarget = isTarget,
                             onClick = {
                                 mainViewModel.qsoSheetCallsign.postValue(message.callsignFrom)
                                 mainViewModel.qsoSheetMinimized.postValue(false)
@@ -287,7 +297,7 @@ private fun TimeGroupDivider(utcTime: Long) {
  * Filters:
  *  - All: no filtering
  *  - CQ Calls: only CQ messages
- *  - New DXCC: never-worked entity (!isQSL_Callsign on CQ calls)
+ *  - New DXCC: CQ from a DXCC entity not yet in the operator's worked list
  *  - Needed: need QSL confirmation (not in QSL callsign list)
  *  - For Me: callsignTo matches operator's callsign
  */
@@ -297,7 +307,7 @@ private fun filterMessages(
 ): List<Ft8Message> {
     return when (filter) {
         "CQ Calls" -> messages.filter { it.checkIsCQ() }
-        "New DXCC" -> messages.filter { it.checkIsCQ() && !it.isQSL_Callsign }
+        "New DXCC" -> messages.filter { it.checkIsCQ() && it.fromDxcc }
         "Needed" -> messages.filter {
             !it.isQSL_Callsign &&
                 !GeneralVariables.checkQSLCallsign(it.callsignFrom ?: "")
