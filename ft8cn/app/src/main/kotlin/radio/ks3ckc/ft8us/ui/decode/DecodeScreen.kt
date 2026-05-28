@@ -297,7 +297,7 @@ private fun TimeGroupDivider(utcTime: Long) {
  * Filters:
  *  - All: no filtering
  *  - CQ Calls: only CQ messages
- *  - New DXCC: never-worked entity (!isQSL_Callsign on CQ calls)
+ *  - New DXCC: CQ from a DXCC entity not yet in the operator's worked list
  *  - Needed: need QSL confirmation (not in QSL callsign list)
  *  - For Me: callsignTo matches operator's callsign
  */
@@ -307,7 +307,7 @@ private fun filterMessages(
 ): List<Ft8Message> {
     return when (filter) {
         "CQ Calls" -> messages.filter { it.checkIsCQ() }
-        "New DXCC" -> messages.filter { it.checkIsCQ() && !it.isQSL_Callsign }
+        "New DXCC" -> messages.filter { it.checkIsCQ() && it.fromDxcc }
         "Needed" -> messages.filter {
             !it.isQSL_Callsign &&
                 !GeneralVariables.checkQSLCallsign(it.callsignFrom ?: "")

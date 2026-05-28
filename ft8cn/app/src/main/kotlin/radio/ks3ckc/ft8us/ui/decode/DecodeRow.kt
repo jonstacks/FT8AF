@@ -65,7 +65,9 @@ fun DecodeRow(
 ) {
     val isCQ = message.checkIsCQ()
     val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
-    val isWorked = message.isQSL_Callsign
+    // Dim rows that are clearly mid-QSO with a third party — they're noise
+    // when the operator is scanning for someone to call.
+    val isInQsoWithOther = !isCQ && !isToMe && !isTarget
     val shape = RoundedCornerShape(12.dp)
 
     // Background color based on message type
@@ -102,7 +104,7 @@ fun DecodeRow(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer {
-                alpha = entryAnim.value
+                alpha = entryAnim.value * (if (isInQsoWithOther) 0.55f else 1f)
                 translationY = (1f - entryAnim.value) * -12f
             }
             .padding(horizontal = 12.dp, vertical = 3.dp)
@@ -177,9 +179,11 @@ fun DecodeRow(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Status pill
+                // Status pill (skipped when there's no useful state to surface)
                 val status = resolveQsoStatus(message)
-                StatusPill(status = status, compact = true)
+                if (status != null) {
+                    StatusPill(status = status, compact = true)
+                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -303,17 +307,37 @@ private fun MetaText(text: String) {
 
 /**
  * Resolve the [QsoStatus] for a given [Ft8Message] based on its state.
+ *
+ * Returns null when there is no useful state to surface (e.g. a station
+ * mid-QSO with someone else who isn't new in any dimension) — the caller
+ * should skip rendering the pill in that case.
+ *
+ * Priority (highest first): calling me, POTA/SOTA activation, new DXCC,
+ * new grid, new band, plain CQ, already worked.
  */
-internal fun resolveQsoStatus(message: Ft8Message): QsoStatus {
+internal fun resolveQsoStatus(message: Ft8Message): QsoStatus? {
     val isCQ = message.checkIsCQ()
     val isWorked = message.isQSL_Callsign
+    val isToMe = GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "")
+    val modifier = message.modifier
+    val grid = message.maidenGrid
+
+    val newGrid = !grid.isNullOrEmpty() &&
+        grid.length >= 4 &&
+        !GeneralVariables.checkQSLGrid(grid)
+    val newBand = !isWorked &&
+        GeneralVariables.checkQSLCallsign_OtherBand(message.callsignFrom ?: "")
 
     return when {
-        isCQ && !isWorked -> QsoStatus.CQ
-        isCQ && isWorked -> QsoStatus.WORKED
-        GeneralVariables.checkIsMyCallsign(message.callsignTo ?: "") -> QsoStatus.PENDING
+        isToMe -> QsoStatus.PENDING
+        isCQ && modifier == "POTA" -> QsoStatus.POTA
+        isCQ && modifier == "SOTA" -> QsoStatus.SOTA
+        message.fromDxcc -> QsoStatus.NEW
+        newGrid -> QsoStatus.NEW_GRID
+        newBand -> QsoStatus.NEW_BAND
         isWorked -> QsoStatus.WORKED
-        else -> QsoStatus.NEW
+        isCQ -> QsoStatus.CQ
+        else -> null
     }
 }
 
