@@ -56,6 +56,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bg7yoz.ft8cn.GeneralVariables
@@ -129,6 +130,8 @@ fun SettingsScreen(
     var showTxDelay by remember { mutableStateOf(false) }
     var showLateStart by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var showDebugScreen by remember { mutableStateOf(false) }
+    var debugEnabled by remember { mutableStateOf(GeneralVariables.debugModeEnabled) }
     var showCloudlog by remember { mutableStateOf(false) }
     var showQrzCreds by remember { mutableStateOf(false) }
     var qrzXmlUser by remember { mutableStateOf(GeneralVariables.qrzXmlUsername.orEmpty()) }
@@ -495,7 +498,27 @@ fun SettingsScreen(
 
     // -- About / FAQ Dialog --
     if (showAbout) {
-        AboutDialog(onDismiss = { showAbout = false })
+        AboutDialog(
+            onDismiss = { showAbout = false },
+            onToggleDebug = {
+                val next = !debugEnabled
+                GeneralVariables.debugModeEnabled = next
+                debugEnabled = next
+                mainViewModel.databaseOpr.writeConfig(
+                    "debugModeEnabled", if (next) "1" else "0", null,
+                )
+                Toast.makeText(
+                    context,
+                    if (next) "Debug mode enabled" else "Debug mode disabled",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+    }
+
+    // -- Debug log viewer --
+    if (showDebugScreen) {
+        DebugLogScreen(onDismiss = { showDebugScreen = false })
     }
 
     // -- QRZ Credentials Dialog --
@@ -1055,6 +1078,15 @@ fun SettingsScreen(
                             showChevron = true,
                             onClick = { showAbout = true },
                         )
+                        if (debugEnabled) {
+                            SectionDivider()
+                            SettingsRow(
+                                label = "Debug",
+                                description = "View / share debug.log",
+                                showChevron = true,
+                                onClick = { showDebugScreen = true },
+                            )
+                        }
                     }
                 }
             }
@@ -1766,8 +1798,15 @@ private fun InfoDialog(
  * About dialog with version info, credits, and tappable QRZ links for the authors.
  */
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+private fun AboutDialog(
+    onDismiss: () -> Unit,
+    onToggleDebug: () -> Unit = {},
+) {
     val uriHandler = LocalUriHandler.current
+    // Hidden debug-mode unlock: 7 consecutive taps on the version block flips
+    // GeneralVariables.debugModeEnabled (and persists it). Counter resets when
+    // the dialog re-opens, matching Android's developer-options UX.
+    var versionTaps by remember { mutableIntStateOf(0) }
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1794,6 +1833,13 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 color = TextMuted,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
+                modifier = Modifier.clickable {
+                    versionTaps += 1
+                    if (versionTaps >= 7) {
+                        versionTaps = 0
+                        onToggleDebug()
+                    }
+                },
             )
 
             Text(
