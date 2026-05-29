@@ -295,12 +295,23 @@ public class UsbAudioDevice {
             ArrayList<Float> accumulator = new ArrayList<>(inputSampleRate);
             float[] outputBuffer = new float[targetRate]; // 1s max
 
+            int iterations = 0;
             while (capturing) {
                 UsbRequest completed = connection.requestWait();
                 if (completed == null) {
-                    if (capturing) Log.e(TAG, "requestWait returned null");
+                    if (capturing) {
+                        com.bg7yoz.ft8cn.GeneralVariables.fileLog(String.format(
+                                "UsbAudio.captureLoop: requestWait returned null "
+                                        + "after %d iterations (target=%dHz "
+                                        + "input=%dHz channels=%d packetSize=%d "
+                                        + "ratio=%d) — host likely cannot drive "
+                                        + "isochronous transfers via UsbRequest",
+                                iterations, targetRate, inputSampleRate,
+                                inputChannels, packetSize, ratio));
+                    }
                     break;
                 }
+                iterations++;
 
                 int bufIndex = (int) completed.getClientData();
                 ByteBuffer buf = buffers[bufIndex];
@@ -358,7 +369,9 @@ public class UsbAudioDevice {
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Capture loop error: " + e.getMessage());
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                    "UsbAudio.captureLoop: exception — "
+                            + e.getClass().getSimpleName() + ": " + e.getMessage());
         } finally {
             for (int i = 0; i < NUM_URBS; i++) {
                 if (requests[i] != null) {

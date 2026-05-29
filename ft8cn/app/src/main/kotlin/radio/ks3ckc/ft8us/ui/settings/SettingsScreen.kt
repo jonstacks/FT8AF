@@ -1824,12 +1824,12 @@ private fun AboutDialog(
             )
 
             Text(
-                text = "Version ${GeneralVariables.VERSION}\n" +
-                    "Build ${GeneralVariables.BUILD_DATE}\n\n" +
-                    "Based on FT8CN by BG7YOZ\n\n" +
-                    "FT8US is a standalone FT8 transceiver app for Android. " +
-                    "It supports USB, Bluetooth, and network rig control " +
-                    "with automatic sequencing and logging.",
+                text = "Version ${GeneralVariables.VERSION} (build ${GeneralVariables.VERSION_CODE})\n" +
+                    "Build date ${GeneralVariables.BUILD_DATE}\n\n" +
+                    "FT8, made easy.\n\n" +
+                    "A standalone FT8 transceiver app for Android. " +
+                    "USB, Bluetooth, and network rig control with " +
+                    "automatic sequencing and logging.",
                 color = TextMuted,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,

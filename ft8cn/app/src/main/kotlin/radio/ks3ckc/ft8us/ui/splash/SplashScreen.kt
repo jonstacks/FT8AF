@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.R
 import radio.ks3ckc.ft8us.theme.Accent
 import radio.ks3ckc.ft8us.theme.GeistMonoFamily
@@ -150,7 +151,7 @@ fun FT8USplashScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "v1.0 · Forked from FT8CN",
+                text = "v${GeneralVariables.VERSION} · build ${GeneralVariables.VERSION_CODE}",
                 color = Color(0xFF8A96B1).copy(alpha = 0.5f),
                 fontSize = 10.sp,
                 fontFamily = GeistMonoFamily,

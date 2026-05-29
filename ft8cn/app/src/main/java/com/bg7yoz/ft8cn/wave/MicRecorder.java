@@ -35,6 +35,19 @@ public class MicRecorder {
     private volatile boolean isRunning = false;//whether currently in recording state
     private OnDataListener onDataListener;
 
+    // USB-audio death-loop guard. On some hosts (notably car-dash Android
+    // tablets) UsbRequest.requestWait() returns null on first iteration and
+    // onCaptureStopped() fires immediately. Without this, MicRecorder would
+    // reinitialize() in a ~30ms-per-cycle tight loop. We rate-limit the
+    // self-rebind and after MAX_CONSECUTIVE_USB_FAILURES failed cycles give up
+    // on the raw USB path and fall back to AudioRecord+default mic so the app
+    // keeps running (read-only) instead of spinning the USB bus.
+    private long lastReinitMs = 0;
+    private int consecutiveUsbFailures = 0;
+    private volatile boolean usbAudioSawData = false;
+    private static final long MIN_REINIT_INTERVAL_MS = 2000;
+    private static final int MAX_CONSECUTIVE_USB_FAILURES = 3;
+
     public interface OnDataListener{
         void onDataReceived(float[] data,int len);
     }
@@ -174,9 +187,17 @@ public class MicRecorder {
 
     private void startUsbCapture() {
         final MicRecorder self = this;
+        usbAudioSawData = false;
         usbAudioDevice.startCapture(sampleRateInHz, new UsbAudioDevice.AudioInputCallback() {
             @Override
             public void onAudioData(float[] data, int length) {
+                if (length > 0 && !usbAudioSawData) {
+                    usbAudioSawData = true;
+                    consecutiveUsbFailures = 0;
+                    GeneralVariables.fileLog(
+                            "startUsbCapture: first audio data received, "
+                                    + "USB stream is live");
+                }
                 if (isRunning && onDataListener != null) {
                     onDataListener.onDataReceived(data, length);
                 }
@@ -184,11 +205,54 @@ public class MicRecorder {
 
             @Override
             public void onCaptureStopped() {
-                // The USB audio device died (cable yank, suspend, etc). Without
-                // this, the decode loop's getVoiceData() callback never fires
-                // and the waterfall just stops. reinitialize() either reopens
-                // a fresh USB handle or falls back to the built-in mic.
-                Log.w(TAG, "USB audio capture stopped unexpectedly, reinitializing");
+                // The USB audio capture loop exited without an explicit stop.
+                // Two distinct cases we need to handle differently:
+                //   1. Genuine device-gone / temporary glitch — rebind once,
+                //      hope the next attempt sticks.
+                //   2. Host can't drive isochronous transfers and requestWait()
+                //      returns null on the first iteration — capture dies in
+                //      ~10ms. Without a guard, reinitialize -> open -> start ->
+                //      die -> reinitialize... spins forever at ~30ms per cycle
+                //      (saw this on a car-dash Android 11 tablet).
+                // Strategy: rate-limit to one reinit per MIN_REINIT_INTERVAL_MS,
+                // and after MAX_CONSECUTIVE_USB_FAILURES cycles without ever
+                // seeing audio data, force-fall-back to AudioRecord. The app
+                // can't transmit through USB then but at least stops thrashing.
+                if (!usbAudioSawData) {
+                    consecutiveUsbFailures++;
+                }
+                long now = System.currentTimeMillis();
+                long sinceLast = now - lastReinitMs;
+                GeneralVariables.fileLog(String.format(
+                        "startUsbCapture: capture STOPPED (sawData=%b "
+                                + "consecFailures=%d sinceLastReinit=%dms)",
+                        usbAudioSawData, consecutiveUsbFailures, sinceLast));
+
+                if (consecutiveUsbFailures >= MAX_CONSECUTIVE_USB_FAILURES
+                        && !usbAudioSawData) {
+                    GeneralVariables.fileLog(
+                            "startUsbCapture: giving up on raw USB after "
+                                    + consecutiveUsbFailures
+                                    + " failures, forcing fallback to AudioRecord");
+                    // Temporarily blank the USB selection so reinitialize()
+                    // takes the AudioRecord branch instead of looping.
+                    GeneralVariables.audioInputDeviceId = 0;
+                    self.reinitialize();
+                    return;
+                }
+
+                if (sinceLast < MIN_REINIT_INTERVAL_MS) {
+                    GeneralVariables.fileLog(
+                            "startUsbCapture: throttling reinit (last was "
+                                    + sinceLast + "ms ago)");
+                    try {
+                        Thread.sleep(MIN_REINIT_INTERVAL_MS - sinceLast);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                lastReinitMs = System.currentTimeMillis();
                 self.reinitialize();
             }
         });
