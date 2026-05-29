@@ -57,37 +57,19 @@ public class AudioDeviceSpinnerAdapter extends BaseAdapter {
             }
         }
 
-        // 2. Scan for USB Audio Class devices not recognized by AudioManager
+        // 2. Scan for USB Audio Class devices and list them as a separate "direct" entry.
+        // We intentionally do NOT dedupe against AudioManager-listed USB devices: on
+        // automotive Android skins the AudioManager entry routes through AudioRecord +
+        // setPreferredDevice(), which the in-car audio policy silently overrides back to
+        // the built-in mic. The raw USB path bypasses that policy entirely, so users on
+        // those systems need both entries visible and labeled distinctly.
         try {
             List<UsbAudioDevice.UsbAudioDeviceInfo> usbDevices =
                     UsbAudioDevice.findUsbAudioDevices(mContext);
             for (UsbAudioDevice.UsbAudioDeviceInfo usbDev : usbDevices) {
                 boolean matchesDirection = isInput ? usbDev.hasInput : usbDev.hasOutput;
                 if (!matchesDirection) continue;
-
-                // Check if this device is already listed by AudioManager (by matching type)
-                boolean alreadyListed = false;
-                for (AudioDeviceInfo adi : audioDeviceList) {
-                    if (adi.getType() == AudioDeviceInfo.TYPE_USB_DEVICE
-                            || adi.getType() == AudioDeviceInfo.TYPE_USB_ACCESSORY
-                            || adi.getType() == AudioDeviceInfo.TYPE_USB_HEADSET) {
-                        // AudioManager already has a USB audio device — might be the same one
-                        // Compare product name if available
-                        String adName = adi.getProductName() != null
-                                ? adi.getProductName().toString() : "";
-                        String usbName = usbDev.device.getProductName() != null
-                                ? usbDev.device.getProductName() : "";
-                        if (!adName.isEmpty() && !usbName.isEmpty()
-                                && adName.equals(usbName)) {
-                            alreadyListed = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!alreadyListed) {
-                    usbAudioDeviceList.add(usbDev);
-                }
+                usbAudioDeviceList.add(usbDev);
             }
         } catch (Exception e) {
             // Ignore USB enumeration errors

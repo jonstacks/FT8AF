@@ -573,7 +573,7 @@ public class UsbAudioDevice {
                 name = String.format("USB Audio [%04X:%04X]",
                         device.getVendorId(), device.getProductId());
             }
-            return name + " (USB)";
+            return name + " (USB direct)";
         }
     }
 }
