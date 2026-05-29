@@ -41,6 +41,12 @@ public class MicRecorder {
 
     @SuppressLint("MissingPermission")
     public MicRecorder(){
+        GeneralVariables.fileLog(String.format(
+                "MicRecorder: init audioInputDeviceId=%d usbVidPid=%04X:%04X",
+                GeneralVariables.audioInputDeviceId,
+                GeneralVariables.usbAudioInputVendorId,
+                GeneralVariables.usbAudioInputProductId));
+
         // Check if USB audio input is selected
         if (GeneralVariables.audioInputDeviceId == -1
                 && GeneralVariables.usbAudioInputVendorId != 0) {
@@ -48,10 +54,11 @@ public class MicRecorder {
             if (usbAudioDevice != null) {
                 useUsbAudio = true;
                 UsbAudioDevice.setActiveInputDevice(usbAudioDevice);
-                Log.d(TAG, "Using USB audio input device");
+                GeneralVariables.fileLog("MicRecorder: using USB audio (direct) input");
                 return; // Skip AudioRecord setup
             }
-            Log.w(TAG, "USB audio device not available, falling back to default");
+            GeneralVariables.fileLog(
+                    "MicRecorder: USB audio open FAILED, falling back to AudioRecord");
         }
 
         //calculate minimum buffer size
@@ -64,7 +71,12 @@ public class MicRecorder {
         if (GeneralVariables.audioInputDeviceId > 0) {
             AudioDeviceInfo deviceInfo = findAudioDeviceById(
                     GeneralVariables.audioInputDeviceId, AudioManager.GET_DEVICES_INPUTS);
-            audioRecord.setPreferredDevice(deviceInfo); // null resets to default
+            boolean ok = audioRecord.setPreferredDevice(deviceInfo); // null resets to default
+            GeneralVariables.fileLog(String.format(
+                    "MicRecorder: AudioRecord(DEFAULT) preferredDevice id=%d ok=%b deviceFound=%b",
+                    GeneralVariables.audioInputDeviceId, ok, deviceInfo != null));
+        } else {
+            GeneralVariables.fileLog("MicRecorder: AudioRecord(DEFAULT) using system default mic");
         }
     }
 
@@ -73,42 +85,62 @@ public class MicRecorder {
      */
     private UsbAudioDevice openUsbAudioInput() {
         Context context = GeneralVariables.getMainContext();
-        if (context == null) return null;
+        if (context == null) {
+            GeneralVariables.fileLog("openUsbAudioInput: no main context");
+            return null;
+        }
 
         UsbDevice device = UsbAudioDevice.findDeviceByVidPid(context,
                 GeneralVariables.usbAudioInputVendorId,
                 GeneralVariables.usbAudioInputProductId);
         if (device == null) {
-            Log.w(TAG, String.format("USB audio device not found: %04X:%04X",
+            GeneralVariables.fileLog(String.format(
+                    "openUsbAudioInput: device not found by VID:PID %04X:%04X",
                     GeneralVariables.usbAudioInputVendorId,
                     GeneralVariables.usbAudioInputProductId));
             return null;
         }
+        GeneralVariables.fileLog(String.format(
+                "openUsbAudioInput: found device %04X:%04X name=%s",
+                device.getVendorId(), device.getProductId(),
+                device.getProductName()));
 
         UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
-        if (usbManager == null || !usbManager.hasPermission(device)) {
-            Log.w(TAG, "No USB permission for audio device");
+        if (usbManager == null) {
+            GeneralVariables.fileLog("openUsbAudioInput: UsbManager is null");
+            return null;
+        }
+        if (!usbManager.hasPermission(device)) {
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: NO USB permission for audio device "
+                            + "(grant via unplug/replug or re-select in Settings)");
             return null;
         }
 
         UsbAudioDevice usbDev = new UsbAudioDevice();
         if (!usbDev.open(context, device)) {
-            Log.e(TAG, "Failed to open USB audio device");
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: UsbAudioDevice.open() FAILED "
+                            + "(descriptor parse or claimInterface failed)");
             return null;
         }
 
         if (!usbDev.hasInput()) {
-            Log.e(TAG, "USB audio device has no input endpoint");
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: device has no input endpoint after open");
             usbDev.close();
             return null;
         }
 
         if (!usbDev.activateInput(48000)) {
-            Log.e(TAG, "Failed to activate USB audio input");
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: activateInput(48000) FAILED "
+                            + "(alt-setting select or endpoint setup failed)");
             usbDev.close();
             return null;
         }
 
+        GeneralVariables.fileLog("openUsbAudioInput: SUCCESS at 48000 Hz");
         return usbDev;
     }
 

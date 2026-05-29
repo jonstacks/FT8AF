@@ -60,7 +60,33 @@ public class GeneralVariables {
     public static int flexMaxRfPower = 10;//Flex radio max transmit power
     public static int flexMaxTunePower = 10;//Flex radio max tune power
 
+    // Hidden debug mode (unlocked by tapping the version 7 times in About).
+    // When true, Settings exposes the Debug screen for log viewing/sharing.
+    public static boolean debugModeEnabled = false;
+
     private Context mainContext;
+
+    /**
+     * Append a timestamped line to the app's external-files-dir debug.log.
+     * Safe to call from any thread; failures are swallowed so logging can never
+     * crash the caller. This is the structured app-event log surfaced by the
+     * in-app Debug screen and `adb pull` workflows.
+     */
+    public static void fileLog(String msg) {
+        try {
+            Context ctx = getMainContext();
+            if (ctx == null) return;
+            File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) return;
+            String ts = new java.text.SimpleDateFormat(
+                    "HH:mm:ss.SSS", java.util.Locale.US).format(new java.util.Date());
+            try (FileOutputStream fos = new FileOutputStream(new File(dir, "debug.log"), true)) {
+                fos.write((ts + " " + msg + "\n").getBytes());
+            }
+        } catch (Exception ignored) {
+        }
+        Log.d(TAG, msg);
+    }
     public static CallsignDatabase callsignDatabase = null;
 
     public void setMainContext(Context context) {
