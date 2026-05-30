@@ -267,6 +267,12 @@ public class GenerateFT8 {
         return signal;
     }
 
+    static byte[] encodeTonesForTest(byte[] a91) {
+        byte[] tones = new byte[num_tones];
+        ft8_encode(a91, tones);
+        return tones;
+    }
+
 
     private static native int packFreeTextTo77(String msg, byte[] c77);
 
