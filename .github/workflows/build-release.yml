@@ -121,6 +121,7 @@ jobs:
       - name: Check release signing secrets
         id: release_secrets
         if: steps.tag.outputs.should_release == 'true'
+        shell: bash
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -156,7 +157,7 @@ jobs:
 
           if ! keytool -list \
               -keystore "$RUNNER_TEMP/release.jks" \
-              -storepass "$RELEASE_STORE_PASSWORD" \
+              -storepass:env RELEASE_STORE_PASSWORD \
               -alias "$RELEASE_KEY_ALIAS" >/dev/null 2>&1; then
             skip_release "Release keystore, store password, or key alias is invalid"
           fi
@@ -166,6 +167,7 @@ jobs:
 
       - name: Build APK & AAB
         working-directory: ft8cn
+        shell: bash
         env:
           RELEASE_SIGNING_AVAILABLE: ${{ steps.release_secrets.outputs.can_release }}
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -235,6 +237,7 @@ jobs:
       - name: Check Play publishing secrets
         id: play_secrets
         if: steps.tag.outputs.should_release == 'true' && steps.release_secrets.outputs.can_release == 'true'
+        shell: bash
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
