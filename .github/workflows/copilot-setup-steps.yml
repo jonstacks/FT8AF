@@ -17,16 +17,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Cache Gradle dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -35,53 +35,10 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: Install Android SDK command-line tools
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          android_sdk_root="$HOME/android-sdk"
-          cmdline_tools_dir="$android_sdk_root/cmdline-tools"
-          latest_dir="$cmdline_tools_dir/latest"
-
-          mkdir -p "$cmdline_tools_dir"
-          if [[ ! -x "$latest_dir/bin/sdkmanager" ]]; then
-            archive="$RUNNER_TEMP/android-commandlinetools.zip"
-            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o "$archive"
-            rm -rf "$RUNNER_TEMP/cmdline-tools" "$latest_dir"
-            unzip -q "$archive" -d "$RUNNER_TEMP"
-            mv "$RUNNER_TEMP/cmdline-tools" "$latest_dir"
-          fi
-
-          {
-            echo "ANDROID_SDK_ROOT=$android_sdk_root"
-            echo "ANDROID_HOME=$android_sdk_root"
-            echo "JAVA_HOME=$JAVA_HOME"
-          } >> "$GITHUB_ENV"
-
-          {
-            echo "$latest_dir/bin"
-            echo "$android_sdk_root/platform-tools"
-            echo "$android_sdk_root/emulator"
-          } >> "$GITHUB_PATH"
-
-          {
-            echo "export ANDROID_SDK_ROOT=$android_sdk_root"
-            echo "export ANDROID_HOME=$android_sdk_root"
-            echo 'export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$PATH"'
-          } >> "$HOME/.bashrc"
-
-      - name: Install Android SDK packages and accept licenses
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "tools platform-tools platforms;android-35 build-tools;35.0.0"
 
       - name: Prepare Gradle wrapper
         shell: bash
