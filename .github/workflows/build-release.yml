@@ -44,6 +44,16 @@ jobs:
         working-directory: ft8cn
         run: ./gradlew testDebugUnitTest --stacktrace
 
+      - name: Generate coverage report
+        working-directory: ft8cn
+        run: ./gradlew jacocoTestReport --stacktrace
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: jacoco-coverage-report
+          path: ft8cn/app/build/reports/jacoco/
+
       - name: Upload test reports on failure
         if: failure()
         uses: actions/upload-artifact@v7
