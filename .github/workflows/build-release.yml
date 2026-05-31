@@ -13,8 +13,8 @@ permissions:
 
 jobs:
   test:
-    name: Unit tests (PR only)
-    if: github.event_name == 'pull_request'
+    name: Unit tests & coverage
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
 
     steps:
@@ -73,7 +73,7 @@ jobs:
   build:
     name: Build APK
     needs: test
-    # Run when tests pass (PR), or when tests were skipped (push to main/Dev/tags).
+    # Run when tests pass (PR/main push), or when tests were skipped (Dev/tags).
     # Block only on actual test failure or cancellation.
     if: ${{ always() && needs.test.result != 'failure' && needs.test.result != 'cancelled' }}
     runs-on: ubuntu-latest
