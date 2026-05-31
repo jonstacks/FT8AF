@@ -5,6 +5,8 @@ on:
     branches: [main, Dev]
     tags:
       - 'v*'
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -66,7 +68,7 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('ft8cn/**/*.gradle*', 'ft8cn/gradle-wrapper.properties') }}
           restore-keys: |
-            gradle-${{ runner.os }}--
+            gradle-${{ runner.os }}-
 
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
