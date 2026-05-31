@@ -35,7 +35,7 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('ft8cn/**/*.gradle*', 'ft8cn/gradle-wrapper.properties') }}
           restore-keys: |
-            gradle-${{ runner.os }}--
+            gradle-${{ runner.os }}-
 
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
@@ -53,6 +53,13 @@ jobs:
         with:
           name: jacoco-coverage-report
           path: ft8cn/app/build/reports/jacoco/
+
+      - name: Upload coverage to Codecov
+        continue-on-error: true
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ft8cn/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
 
       - name: Upload test reports on failure
         if: failure()
@@ -123,7 +130,7 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('ft8cn/**/*.gradle*', 'ft8cn/gradle-wrapper.properties') }}
           restore-keys: |
-            gradle-${{ runner.os }}--
+            gradle-${{ runner.os }}-
 
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
