@@ -118,18 +118,58 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ft8cn/gradlew
 
-      - name: Decode keystore (release builds only)
+      - name: Check release signing secrets
+        id: release_secrets
         if: steps.tag.outputs.should_release == 'true'
+        shell: bash
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+
+          skip_release() {
+            echo "::notice::$1; skipping GitHub release, tag creation, and Play publishing."
+            echo "can_release=false" >> "$GITHUB_OUTPUT"
+            rm -f "$RUNNER_TEMP/release.jks"
+            exit 0
+          }
+
+          missing=()
+          [[ -n "$RELEASE_KEYSTORE_BASE64" ]] || missing+=(RELEASE_KEYSTORE_BASE64)
+          [[ -n "$RELEASE_STORE_PASSWORD" ]] || missing+=(RELEASE_STORE_PASSWORD)
+          [[ -n "$RELEASE_KEY_ALIAS" ]] || missing+=(RELEASE_KEY_ALIAS)
+          [[ -n "$RELEASE_KEY_PASSWORD" ]] || missing+=(RELEASE_KEY_PASSWORD)
+
+          if (( ${#missing[@]} > 0 )); then
+            skip_release "Release signing secrets are not configured: ${missing[*]}"
+          fi
+
+          if ! printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"; then
+            skip_release "RELEASE_KEYSTORE_BASE64 is not valid base64"
+          fi
+
+          if [[ ! -s "$RUNNER_TEMP/release.jks" ]]; then
+            skip_release "Decoded release keystore is empty"
+          fi
+
+          if ! keytool -list \
+              -keystore "$RUNNER_TEMP/release.jks" \
+              -storepass:env RELEASE_STORE_PASSWORD \
+              -alias "$RELEASE_KEY_ALIAS" >/dev/null 2>&1; then
+            skip_release "Release keystore, store password, or key alias is invalid"
+          fi
+
+          echo "can_release=true" >> "$GITHUB_OUTPUT"
           echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
       - name: Build APK & AAB
         working-directory: ft8cn
+        shell: bash
         env:
+          RELEASE_SIGNING_AVAILABLE: ${{ steps.release_secrets.outputs.can_release }}
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
@@ -139,7 +179,7 @@ jobs:
           # Sign + produce AAB only on release builds — PR builds stay unsigned
           # because the keystore secret isn't available (and shouldn't be) for
           # fork PRs.
-          if [[ -n "${RELEASE_STORE_FILE:-}" ]]; then
+          if [[ "${RELEASE_SIGNING_AVAILABLE}" == "true" && -n "${RELEASE_STORE_FILE:-}" ]]; then
             args+=(bundleRelease \
               "-PRELEASE_STORE_FILE=$RELEASE_STORE_FILE" \
               "-PRELEASE_STORE_PASSWORD=$RELEASE_STORE_PASSWORD" \
@@ -149,7 +189,7 @@ jobs:
           ./gradlew "${args[@]}"
 
       - name: Rename APK
-        if: steps.tag.outputs.should_release == 'true'
+        if: steps.tag.outputs.should_release == 'true' && steps.release_secrets.outputs.can_release == 'true'
         run: |
           set -euo pipefail
           cd ft8cn/app/build/outputs/apk/release
@@ -173,14 +213,14 @@ jobs:
           path: ft8cn/app/build/outputs/apk/release/*.apk
 
       - name: Upload AAB artifact
-        if: steps.tag.outputs.should_release == 'true'
+        if: steps.tag.outputs.should_release == 'true' && steps.release_secrets.outputs.can_release == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: ft8cn-release-aab
           path: ft8cn/app/build/outputs/bundle/release/*.aab
 
       - name: Create GitHub Release
-        if: steps.tag.outputs.should_release == 'true'
+        if: steps.tag.outputs.should_release == 'true' && steps.release_secrets.outputs.can_release == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
@@ -194,8 +234,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check Play publishing secrets
+        id: play_secrets
+        if: steps.tag.outputs.should_release == 'true' && steps.release_secrets.outputs.can_release == 'true'
+        shell: bash
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "::notice::PLAY_SERVICE_ACCOUNT_JSON is not configured; skipping Play publishing."
+            echo "can_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish AAB to Play Internal track
-        if: steps.tag.outputs.should_release == 'true' && github.event.repository.fork == false
+        if: steps.tag.outputs.should_release == 'true' && steps.release_secrets.outputs.can_release == 'true' && steps.play_secrets.outputs.can_publish == 'true' && github.event.repository.fork == false
         uses: r0adkll/upload-google-play@v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
