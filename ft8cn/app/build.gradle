@@ -4,6 +4,7 @@ import java.text.SimpleDateFormat
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'jacoco'
 }
 
 def currentTime = getCurrentTime()
@@ -175,6 +176,9 @@ dependencies {
     testImplementation 'com.google.truth:truth:1.4.2'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    // The Compose BOM is only wired into `implementation`; apply it here too so
+    // the unversioned compose test artifacts below resolve a coherent version.
+    testImplementation composeBom
     testImplementation 'androidx.compose.ui:ui-test-junit4'
 
     // ui-test-manifest must be debug-scoped: the merged debug manifest is what
@@ -183,7 +187,47 @@ dependencies {
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
     // --- Connected (instrumented) tests ---
+    androidTestImplementation composeBom
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+}
+
+jacoco {
+    toolVersion = '0.8.12'
+}
+
+tasks.register('jacocoTestReport', JacocoReport) {
+    dependsOn 'testDebugUnitTest'
+
+    reports {
+        xml.required = true
+        html.required = true
+        csv.required = false
+    }
+
+    def excludes = [
+            '**/R.class',
+            '**/R$*.class',
+            '**/BuildConfig.*',
+            '**/Manifest*.*',
+            '**/*Test*.*',
+            '**/*$ViewBinder*.*',
+            '**/*$ViewInjector*.*',
+            '**/*Binding.*',
+            '**/*BindingImpl.*',
+            '**/DataBinderMapperImpl.*',
+            '**/BR.*',
+            '**/*ComposableSingletons*.*'
+    ]
+
+    classDirectories.setFrom(files(
+            fileTree(dir: "$buildDir/intermediates/javac/debug/classes", excludes: excludes),
+            fileTree(dir: "$buildDir/tmp/kotlin-classes/debug", excludes: excludes)
+    ))
+    sourceDirectories.setFrom(files('src/main/java', 'src/main/kotlin'))
+    executionData.setFrom(fileTree(dir: buildDir, includes: [
+            'jacoco/testDebugUnitTest.exec',
+            'outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec'
+    ]))
 }
