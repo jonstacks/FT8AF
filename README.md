@@ -45,6 +45,26 @@ cd ft8cn
 ./gradlew installDebug
 ```
 
+## Development
+
+This repository includes a Nix flake for a reproducible Android development
+shell. It pins JDK 17, Android SDK platform 35, build-tools 35.0.0, and an
+Android emulator image.
+
+```bash
+nix develop
+cd ft8cn
+./gradlew testDebugUnitTest
+./gradlew assembleDebug
+```
+
+If you use direnv, run `direnv allow` once and the shell will load
+automatically. Start the packaged emulator with:
+
+```bash
+run-ft8af-emulator
+```
+
 ---
 
 ## Thanks
