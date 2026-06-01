@@ -2,6 +2,8 @@
 
 **FT8 on Android — modernized.**
 
+🌐 **[ft8af.app](https://ft8af.app)**
+
 A fork of [FT8CN](https://github.com/N0BOY/FT8CN) that takes the excellent original and brings it forward: a Jetpack Compose UI, full English localization, dozens of bug fixes, and a pile of new operating features built for real on-the-air use.
 
 Run FT8 natively on your Android phone or tablet, drive your radio over USB CAT, decode the band, and work the world from anywhere.
