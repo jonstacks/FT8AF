@@ -2,11 +2,11 @@ name: Build & Release APK
 
 on:
   push:
-    branches: [main, Dev]
+    branches: [main, dev]
     tags:
       - 'v*'
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: write
@@ -56,7 +56,7 @@ jobs:
   build:
     name: Build APK
     needs: test
-    # Run when tests pass (PR), or when tests were skipped (push to main/Dev/tags).
+    # Run when tests pass (PR), or when tests were skipped (push to main/dev/tags).
     # Block only on actual test failure or cancellation.
     if: ${{ always() && needs.test.result != 'failure' && needs.test.result != 'cancelled' }}
     runs-on: ubuntu-latest
@@ -74,12 +74,19 @@ jobs:
         id: tag
         run: |
           set -euo pipefail
+          # Three release lanes (everything else is build-only):
+          #   v* tag push  -> production-named release, NOT prerelease
+          #   push to main -> auto-bumped v* tag, NOT prerelease
+          #   push to dev  -> dev-<run_number> tag, PRERELEASE
+          # Prereleases are still uploaded to Play internal but with a
+          # distinct releaseName so they're easy to tell apart from the
+          # v*-named candidates we'd actually promote to production.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            # Manual tag push — release as that tag
             echo "release_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           elif [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/main" ]]; then
-            # Push to main — auto-bump patch from latest v* tag
+            # Auto-bump patch from latest v* tag.
             latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
             if [[ -z "$latest" ]]; then
               new_tag="v0.1"
@@ -93,10 +100,21 @@ jobs:
             echo "Latest tag: ${latest:-<none>} -> new tag: $new_tag"
             echo "release_tag=$new_tag" >> "$GITHUB_OUTPUT"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/dev" ]]; then
+            # dev pushes get a run-numbered tag and are flagged as prereleases.
+            # Distinct prefix so they sort separately from v* in GitHub releases
+            # and so the Play Console releaseName disambiguates them from
+            # main-branch release candidates.
+            new_tag="dev-${GITHUB_RUN_NUMBER}"
+            echo "release_tag=$new_tag" >> "$GITHUB_OUTPUT"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            # PR or Dev push — build only, no release
+            # PR or other branch push — build only, no release
             echo "release_tag=" >> "$GITHUB_OUTPUT"
             echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up JDK 17
@@ -186,6 +204,10 @@ jobs:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           files: ft8cn/app/build/outputs/apk/release/FT8CN-*.apk
           generate_release_notes: true
+          # dev-* releases are flagged as prerelease so they sort under the
+          # latest v* and don't get picked up by downstream tooling that
+          # looks for "latest release".
+          prerelease: ${{ steps.tag.outputs.is_prerelease == 'true' }}
           append_body: true
           body: |
 
