@@ -111,4 +111,39 @@ public final class UsbAudioNative {
      *  event thread has drained outstanding URBs and the callback's
      *  {@code onCaptureStopped} has been invoked. */
     public static native void nativeStop(long handle);
+
+    /**
+     * Synchronously push a complete PCM buffer out through an iso OUT
+     * endpoint. Mirrors {@link #nativeStart} but for transmit — caller
+     * already has the endpoint open and alt-setting active, and hands us
+     * the fd plus the byte buffer to drain. Blocks until the kernel has
+     * accepted every packet (or an error occurs).
+     *
+     * @param fd                   file descriptor from
+     *                             {@link android.hardware.usb.UsbDeviceConnection#getFileDescriptor()}.
+     * @param interfaceNumber      bInterfaceNumber of the audio streaming OUT interface.
+     * @param altSetting           alt-setting already activated on that interface.
+     * @param endpointAddress      bEndpointAddress of the iso OUT endpoint.
+     * @param maxPacketSize        wMaxPacketSize from the endpoint descriptor.
+     * @param outputSampleRate     device sample rate (informational).
+     * @param outputChannels       device channel count (informational; buffer is
+     *                             expected to already be interleaved correctly).
+     * @param outputBytesPerSample 2 for 16-bit PCM (informational).
+     * @param pcmData              interleaved little-endian int16 PCM bytes,
+     *                             already at outputSampleRate × outputChannels.
+     * @return                     0 on success, or a negative libusb error code
+     *                             ({@code LIBUSB_ERROR_*}) on failure. Caller
+     *                             should fall back to the {@code UsbRequest} path
+     *                             on a non-zero return.
+     */
+    public static native int nativeWrite(
+            int fd,
+            int interfaceNumber,
+            int altSetting,
+            int endpointAddress,
+            int maxPacketSize,
+            int outputSampleRate,
+            int outputChannels,
+            int outputBytesPerSample,
+            byte[] pcmData);
 }
