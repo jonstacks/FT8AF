@@ -1843,6 +1843,21 @@ private fun AboutDialog(
             )
 
             Text(
+                text = "Website",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+            )
+            Text(
+                text = "ft8af.app",
+                color = Accent,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { uriHandler.openUri("https://ft8af.app") },
+            )
+
+            Text(
                 text = "Built by",
                 color = TextPrimary,
                 fontWeight = FontWeight.SemiBold,

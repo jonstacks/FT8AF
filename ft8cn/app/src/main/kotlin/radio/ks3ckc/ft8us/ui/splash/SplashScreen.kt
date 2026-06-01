@@ -158,6 +158,16 @@ fun FT8USplashScreen(
                 letterSpacing = 0.08.em,
             )
 
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "ft8af.app",
+                color = Color(0xFF8A96B1).copy(alpha = 0.45f),
+                fontSize = 10.sp,
+                fontFamily = GeistMonoFamily,
+                letterSpacing = 0.08.em,
+            )
+
             Spacer(modifier = Modifier.height(96.dp))
         }
     }
