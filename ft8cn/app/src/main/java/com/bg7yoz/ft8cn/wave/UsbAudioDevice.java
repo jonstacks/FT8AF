@@ -43,6 +43,9 @@ public class UsbAudioDevice {
     private int inputSampleRate = 48000;
     private int inputChannels = 1;
     private volatile boolean capturing = false;
+    // Non-zero when the libusb-backed capture session is live; in that case
+    // captureLoop() is bypassed and stopCapture() routes through native.
+    private volatile long nativeCaptureHandle = 0;
 
     // Output (speaker)
     private UsbInterface streamingInterfaceOut;
@@ -261,6 +264,64 @@ public class UsbAudioDevice {
         if (endpointIn == null) return;
         capturing = true;
 
+        // Prefer the libusb-backed native path. On hosts where Android's
+        // UsbRequest can't drive iso transfers (notably automotive Android
+        // 11 tablets), the UsbRequest fallback below throws
+        // IllegalStateException on first queue. libusb talks to USBDEVFS
+        // directly and works where UsbRequest doesn't.
+        if (UsbAudioNative.isAvailable() && connection != null
+                && streamingInterfaceIn != null) {
+            int fd = connection.getFileDescriptor();
+            int ifaceNum = streamingInterfaceIn.getId();
+            int altSet = streamingInterfaceIn.getAlternateSetting();
+            int epAddr = endpointIn.getAddress();
+            int maxPkt = endpointIn.getMaxPacketSize();
+
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(String.format(
+                    "UsbAudioDevice: trying libusb native capture "
+                            + "fd=%d iface=%d alt=%d ep=0x%02x maxPkt=%d "
+                            + "inputRate=%d ch=%d targetRate=%d",
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    inputSampleRate, inputChannels, targetSampleRate));
+
+            final AudioInputCallback javaCb = callback;
+            long handle = UsbAudioNative.nativeStart(
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    inputSampleRate, inputChannels, /*bytesPerSample=*/2,
+                    targetSampleRate,
+                    new UsbAudioNative.AudioInputCallback() {
+                        @Override
+                        public void onAudioData(float[] data, int length) {
+                            if (capturing && javaCb != null) {
+                                javaCb.onAudioData(data, length);
+                            }
+                        }
+
+                        @Override
+                        public void onCaptureStopped(int code) {
+                            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                                    "UsbAudioDevice: libusb capture stopped, "
+                                            + "code=" + code);
+                            nativeCaptureHandle = 0;
+                            capturing = false;
+                            if (javaCb != null) javaCb.onCaptureStopped();
+                        }
+                    });
+
+            if (handle != 0) {
+                nativeCaptureHandle = handle;
+                com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                        "UsbAudioDevice: libusb capture started OK");
+                return;
+            }
+
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                    "UsbAudioDevice: libusb start FAILED, "
+                            + "falling back to UsbRequest path");
+        }
+
+        // Fallback: original UsbRequest-based loop. Kept so devices that work
+        // with Android's iso path don't regress on the new native lib.
         final int packetSize = endpointIn.getMaxPacketSize();
         final int ratio = inputSampleRate / targetSampleRate;
 
@@ -396,6 +457,15 @@ public class UsbAudioDevice {
 
     public void stopCapture() {
         capturing = false;
+        long h = nativeCaptureHandle;
+        if (h != 0) {
+            nativeCaptureHandle = 0;
+            try {
+                UsbAudioNative.nativeStop(h);
+            } catch (Throwable t) {
+                Log.w(TAG, "nativeStop threw: " + t.getMessage());
+            }
+        }
     }
 
     /**

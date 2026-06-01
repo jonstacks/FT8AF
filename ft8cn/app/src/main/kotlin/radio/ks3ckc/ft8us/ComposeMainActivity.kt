@@ -43,6 +43,7 @@ import com.bg7yoz.ft8cn.database.OnAfterQueryConfig
 import com.bg7yoz.ft8cn.database.OperationBand
 import com.bg7yoz.ft8cn.location.GridLocationUpdater
 import com.bg7yoz.ft8cn.log.ImportSharedLogs
+import com.bg7yoz.ft8cn.wave.UsbAudioNative
 import com.bg7yoz.ft8cn.log.OnShareLogEvents
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
 import com.bg7yoz.ft8cn.ui.ToastMessage
@@ -139,6 +140,18 @@ class ComposeMainActivity : ComponentActivity() {
 
         // Initialize data
         fileLog("=== APP START ===")
+        // Phase-1 native-library sanity log. Confirms libft8af_usb.so loaded
+        // and JNI is reachable; Phase 2 will replace the sentinel with the
+        // libusb version + capabilities string.
+        if (UsbAudioNative.isAvailable()) {
+            try {
+                fileLog("UsbAudioNative: " + UsbAudioNative.nativeBuildString())
+            } catch (e: Throwable) {
+                fileLog("UsbAudioNative: call threw ${e.javaClass.simpleName}: ${e.message}")
+            }
+        } else {
+            fileLog("UsbAudioNative: library NOT loaded")
+        }
         initData()
 
         // Observe serial port changes for auto-connect (mirrors old MainActivity behavior)
