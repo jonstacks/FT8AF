@@ -394,3 +394,228 @@ Java_com_bg7yoz_ft8cn_wave_UsbAudioNative_nativeStop(
     delete s;
     LOGI("stopped capture");
 }
+
+// ----------------------------------------------------------------------------
+// Synchronous OUTPUT write
+// ----------------------------------------------------------------------------
+//
+// FT8TransmitSignal hands us a fully-formatted PCM byte buffer (interleaved
+// little-endian int16, already at the device's native sample rate and
+// channel count) plus the iso OUT endpoint info. We push it out through
+// libusb iso transfers and block until the kernel has drained the entire
+// buffer — same shape as the existing UsbRequest-based writeAudio() in
+// Java, but via libusb so the car-dash kernel doesn't reject us.
+//
+// Implementation: keep kNumOutputTransfers transfers in flight, each
+// carrying kPacketsPerOutputTransfer packets. Each completion callback
+// refills its transfer with the next chunk and resubmits, until the input
+// buffer is exhausted; the JNI thread spins libusb_handle_events_timeout_*
+// until the in-flight count drops to zero.
+
+namespace {
+
+constexpr int kPacketsPerOutputTransfer = 8;
+constexpr int kNumOutputTransfers       = 4;
+
+struct OutputSession {
+    libusb_context*       ctx        = nullptr;
+    libusb_device_handle* handle     = nullptr;
+    int                   endpoint   = 0;
+    int                   maxPktSize = 0;
+    const uint8_t*        pcm        = nullptr;
+    int                   pcmLen     = 0;
+    int                   pcmOffset  = 0;
+    std::atomic<int>      inFlight{0};
+    std::atomic<int>      firstError{0};   // non-zero = first libusb error code seen
+};
+
+void LIBUSB_CALL onOutputComplete(libusb_transfer* xfer) {
+    auto* s = static_cast<OutputSession*>(xfer->user_data);
+
+    if (xfer->status != LIBUSB_TRANSFER_COMPLETED) {
+        int expect = 0;
+        s->firstError.compare_exchange_strong(expect, xfer->status);
+        // For terminal errors we let the in-flight counter drop so the
+        // caller exits. Iso has best-effort delivery semantics, but a
+        // NO_DEVICE / CANCELLED is unrecoverable.
+        if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE
+                || xfer->status == LIBUSB_TRANSFER_CANCELLED) {
+            s->inFlight.fetch_sub(1, std::memory_order_acq_rel);
+            return;
+        }
+        // Other statuses (STALL, TIMED_OUT, OVERFLOW): try to keep going,
+        // but only if PCM remains.
+    }
+
+    if (s->pcmOffset >= s->pcmLen) {
+        // Done; let this transfer retire.
+        s->inFlight.fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+
+    int chunkBytes = kPacketsPerOutputTransfer * s->maxPktSize;
+    int remaining  = s->pcmLen - s->pcmOffset;
+    int thisChunk  = std::min(chunkBytes, remaining);
+
+    std::memcpy(xfer->buffer, s->pcm + s->pcmOffset, thisChunk);
+    if (thisChunk < chunkBytes) {
+        std::memset(xfer->buffer + thisChunk, 0, chunkBytes - thisChunk);
+    }
+    s->pcmOffset += thisChunk;
+
+    int rc = libusb_submit_transfer(xfer);
+    if (rc != 0) {
+        int expect = 0;
+        s->firstError.compare_exchange_strong(expect, rc);
+        s->inFlight.fetch_sub(1, std::memory_order_acq_rel);
+    }
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_bg7yoz_ft8cn_wave_UsbAudioNative_nativeWrite(
+        JNIEnv* env,
+        jclass /*clazz*/,
+        jint fd,
+        jint /*interfaceNumber*/,
+        jint /*altSetting*/,
+        jint endpointAddress,
+        jint maxPacketSize,
+        jint /*outputSampleRate*/,
+        jint /*outputChannels*/,
+        jint /*outputBytesPerSample*/,
+        jbyteArray pcmArray) {
+
+    if (!pcmArray) return LIBUSB_ERROR_INVALID_PARAM;
+    if (maxPacketSize <= 0) return LIBUSB_ERROR_INVALID_PARAM;
+
+    libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+
+    libusb_context* ctx = nullptr;
+    int rc = libusb_init(&ctx);
+    if (rc != 0) {
+        LOGE("nativeWrite: libusb_init: %s", libusb_error_name(rc));
+        return rc;
+    }
+
+    libusb_device_handle* handle = nullptr;
+    rc = libusb_wrap_sys_device(ctx, (intptr_t)fd, &handle);
+    if (rc != 0 || !handle) {
+        LOGE("nativeWrite: libusb_wrap_sys_device(fd=%d): %s",
+             fd, libusb_error_name(rc));
+        libusb_exit(ctx);
+        return rc != 0 ? rc : LIBUSB_ERROR_NO_DEVICE;
+    }
+
+    jsize pcmLen = env->GetArrayLength(pcmArray);
+    // Critical lock: PCM bytes are read directly into transfer buffers
+    // during this call; we don't need to keep them after we return.
+    jbyte* pcmBytes = env->GetByteArrayElements(pcmArray, nullptr);
+    if (!pcmBytes) {
+        libusb_close(handle);
+        libusb_exit(ctx);
+        return LIBUSB_ERROR_NO_MEM;
+    }
+
+    OutputSession s;
+    s.ctx        = ctx;
+    s.handle     = handle;
+    s.endpoint   = endpointAddress;
+    s.maxPktSize = maxPacketSize;
+    s.pcm        = reinterpret_cast<const uint8_t*>(pcmBytes);
+    s.pcmLen     = (int)pcmLen;
+    s.pcmOffset  = 0;
+
+    libusb_transfer* xfers[kNumOutputTransfers] = {nullptr};
+    int submitted = 0;
+
+    for (int i = 0; i < kNumOutputTransfers && s.pcmOffset < s.pcmLen; ++i) {
+        xfers[i] = libusb_alloc_transfer(kPacketsPerOutputTransfer);
+        if (!xfers[i]) {
+            int expect = 0;
+            s.firstError.compare_exchange_strong(expect, LIBUSB_ERROR_NO_MEM);
+            continue;
+        }
+        int chunkBytes = kPacketsPerOutputTransfer * s.maxPktSize;
+        auto* buf = static_cast<uint8_t*>(std::malloc(chunkBytes));
+        if (!buf) {
+            libusb_free_transfer(xfers[i]);
+            xfers[i] = nullptr;
+            int expect = 0;
+            s.firstError.compare_exchange_strong(expect, LIBUSB_ERROR_NO_MEM);
+            continue;
+        }
+
+        int remaining = s.pcmLen - s.pcmOffset;
+        int thisChunk = std::min(chunkBytes, remaining);
+        std::memcpy(buf, s.pcm + s.pcmOffset, thisChunk);
+        if (thisChunk < chunkBytes) {
+            std::memset(buf + thisChunk, 0, chunkBytes - thisChunk);
+        }
+        s.pcmOffset += thisChunk;
+
+        libusb_fill_iso_transfer(
+                xfers[i], handle, (unsigned char)s.endpoint,
+                buf, chunkBytes, kPacketsPerOutputTransfer,
+                onOutputComplete, &s, /*timeout=*/0);
+        libusb_set_iso_packet_lengths(xfers[i], s.maxPktSize);
+        xfers[i]->flags = LIBUSB_TRANSFER_FREE_BUFFER;
+
+        int rcSub = libusb_submit_transfer(xfers[i]);
+        if (rcSub != 0) {
+            LOGE("nativeWrite: submit i=%d: %s", i, libusb_error_name(rcSub));
+            int expect = 0;
+            s.firstError.compare_exchange_strong(expect, rcSub);
+            libusb_free_transfer(xfers[i]);
+            xfers[i] = nullptr;
+            continue;
+        }
+        s.inFlight.fetch_add(1, std::memory_order_acq_rel);
+        submitted++;
+    }
+
+    LOGI("nativeWrite: %d transfers submitted, pcmLen=%d ep=0x%02x maxPkt=%d",
+         submitted, (int)pcmLen, endpointAddress, maxPacketSize);
+
+    if (submitted == 0) {
+        env->ReleaseByteArrayElements(pcmArray, pcmBytes, JNI_ABORT);
+        libusb_close(handle);
+        libusb_exit(ctx);
+        return s.firstError.load();
+    }
+
+    // Drain. Iso transfers are paced by the device's bandwidth allocation,
+    // so this naturally takes ~ pcmLen / (sampleRate * channels * 2) seconds.
+    while (s.inFlight.load(std::memory_order_acquire) > 0) {
+        timeval tv{0, 50000};  // 50ms
+        rc = libusb_handle_events_timeout_completed(ctx, &tv, nullptr);
+        if (rc != 0 && rc != LIBUSB_ERROR_INTERRUPTED) {
+            LOGE("nativeWrite: handle_events: %s", libusb_error_name(rc));
+            int expect = 0;
+            s.firstError.compare_exchange_strong(expect, rc);
+            break;
+        }
+    }
+
+    // Cancel any still-pending transfers (in error paths).
+    for (int i = 0; i < kNumOutputTransfers; ++i) {
+        if (xfers[i]) libusb_cancel_transfer(xfers[i]);
+    }
+    while (s.inFlight.load(std::memory_order_acquire) > 0) {
+        timeval tv{0, 50000};
+        libusb_handle_events_timeout_completed(ctx, &tv, nullptr);
+    }
+    for (int i = 0; i < kNumOutputTransfers; ++i) {
+        if (xfers[i]) libusb_free_transfer(xfers[i]);
+    }
+
+    env->ReleaseByteArrayElements(pcmArray, pcmBytes, JNI_ABORT);
+    libusb_close(handle);
+    libusb_exit(ctx);
+
+    int err = s.firstError.load();
+    LOGI("nativeWrite: done, firstError=%d (%s)",
+         err, err == 0 ? "OK" : libusb_error_name(err));
+    return err;
+}
