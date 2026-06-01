@@ -502,6 +502,41 @@ public class UsbAudioDevice {
             }
         }
 
+        // Prefer the libusb-backed native path. Same reason as input: on hosts
+        // where Android's UsbRequest can't drive iso (notably car-dash kernels)
+        // request.initialize() returns false and writeAudio fails immediately,
+        // which aborts the TX after ~200ms. libusb talks to USBDEVFS directly.
+        if (UsbAudioNative.isAvailable() && streamingInterfaceOut != null) {
+            int fd = connection.getFileDescriptor();
+            int ifaceNum = streamingInterfaceOut.getId();
+            int altSet = streamingInterfaceOut.getAlternateSetting();
+            int epAddr = endpointOut.getAddress();
+            int maxPkt = endpointOut.getMaxPacketSize();
+
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(String.format(
+                    "UsbAudioDevice: trying libusb native write "
+                            + "fd=%d iface=%d alt=%d ep=0x%02x maxPkt=%d "
+                            + "bytes=%d outputRate=%d ch=%d",
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    pcmData.length, outputSampleRate, outputChannels));
+
+            int rc = UsbAudioNative.nativeWrite(
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    outputSampleRate, outputChannels, /*bytesPerSample=*/2,
+                    pcmData);
+
+            if (rc == 0) {
+                com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                        "UsbAudioDevice: libusb native write OK");
+                return true;
+            }
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                    "UsbAudioDevice: libusb native write FAILED rc=" + rc
+                            + ", falling back to UsbRequest");
+        }
+
+        // Fallback: original UsbRequest-based write. Kept so devices that work
+        // through Android's iso path don't regress on the new native lib.
         // Write in chunks matching max packet size
         int packetSize = endpointOut.getMaxPacketSize();
         int offset = 0;
