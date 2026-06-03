@@ -342,9 +342,15 @@ internal fun resolveQsoStatus(message: Ft8Message): QsoStatus? {
     val newBand = !isWorked &&
         GeneralVariables.checkQSLCallsign_OtherBand(message.callsignFrom ?: "")
 
+    // Spotted-on-pota.app activators frequently CQ without the "POTA" suffix
+    // because their full call already eats the budget. Treat them as POTA so
+    // hunters can recognise them at a glance.
+    val isSpottedPotaActivator =
+        radio.ks3ckc.ft8us.pota.PotaSpotsRepository.parkRefFor(message.callsignFrom) != null
+
     return when {
         isToMe -> QsoStatus.PENDING
-        isCQ && modifier == "POTA" -> QsoStatus.POTA
+        isCQ && (modifier == "POTA" || isSpottedPotaActivator) -> QsoStatus.POTA
         isCQ && modifier == "SOTA" -> QsoStatus.SOTA
         message.fromDxcc -> QsoStatus.NEW
         newGrid -> QsoStatus.NEW_GRID

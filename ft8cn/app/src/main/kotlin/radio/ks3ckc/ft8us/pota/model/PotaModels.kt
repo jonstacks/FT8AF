@@ -1,0 +1,36 @@
+package radio.ks3ckc.ft8us.pota.model
+
+/** One row from the live POTA spots feed (api.pota.app/spot/activator). */
+data class PotaSpot(
+    val activator: String,
+    val frequencyKhz: Double,
+    val mode: String,
+    val reference: String,
+    val parkName: String,
+    val locationDesc: String,
+    val spotter: String,
+    val spotTimeUtc: String,
+    val comments: String,
+) {
+    val frequencyHz: Long get() = (frequencyKhz * 1000).toLong()
+}
+
+/** Park metadata. Mostly we fill this from spot rows; the lookup endpoint is optional. */
+data class PotaPark(
+    val reference: String,
+    val name: String,
+    val locationDesc: String,
+)
+
+/** A logged activation session (row from pota_activation). */
+data class PotaActivation(
+    val id: Long,
+    val parkRef: String,
+    val operator: String?,
+    val startedAtMs: Long,
+    val endedAtMs: Long?,
+    val qsoCount: Int,
+    val notes: String?,
+) {
+    val isActive: Boolean get() = endedAtMs == null
+}

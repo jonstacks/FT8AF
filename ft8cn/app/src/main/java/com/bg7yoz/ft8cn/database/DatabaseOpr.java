@@ -54,7 +54,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
     public static synchronized DatabaseOpr getInstance(@Nullable Context context, @Nullable String databaseName) {
         if (instance == null) {
-            instance = new DatabaseOpr(context, databaseName, null, 16);
+            instance = new DatabaseOpr(context, databaseName, null, 18);
         }
         return instance;
     }
@@ -96,6 +96,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         //Create SWL-related tables
         createSWLTables(sqLiteDatabase);
 
+        //Create POTA activation history table
+        createPotaTables(sqLiteDatabase);
+
         //Create indexes
         createIndex(sqLiteDatabase);
 
@@ -120,6 +123,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
         //Create SWL-related tables
         createSWLTables(sqLiteDatabase);
+
+        //Create POTA activation history table
+        createPotaTables(sqLiteDatabase);
 
         //Create indexes
         createIndex(sqLiteDatabase);
@@ -156,18 +162,32 @@ public class DatabaseOpr extends SQLiteOpenHelper {
      * @param sql       column definition SQL
      */
     private void alterTable(SQLiteDatabase db, String tableName, String fieldName, String sql) {
-        // Identifiers are interpolated into ALTER TABLE because SQLite cannot bind them; restrict
-        // to simple SQL identifiers so a stray caller can never inject statements.
+        // Identifiers are interpolated into ALTER TABLE and PRAGMA because SQLite cannot bind them;
+        // restrict to simple SQL identifiers so a stray caller can never inject statements.
         if (!SQL_IDENTIFIER.matcher(tableName).matches()
                 || !SQL_IDENTIFIER.matcher(fieldName).matches()) {
             throw new IllegalArgumentException("Invalid SQL identifier");
         }
-        Cursor cursor = db.rawQuery("select * from sqlite_master where name=? and sql like ?"
-                , new String[]{tableName, "%" + fieldName + "%"});
-        if (!cursor.moveToNext()) {
+        // Query the live schema. The previous LIKE-on-sqlite_master.sql approach was broken
+        // two ways: sqlite_master.sql freezes the original CREATE TABLE text and never
+        // reflects ALTER TABLE ADD COLUMN, and the unanchored substring match treated
+        // `sig` as already present whenever `my_sig` was in the original CREATE — so the
+        // `sig`/`sig_info` columns were never added on upgraded installs and POTA QSO
+        // inserts crashed with "no column named sig".
+        boolean exists = false;
+        try (Cursor cursor = db.rawQuery(
+                String.format("PRAGMA table_info(%s)", tableName), null)) {
+            int nameIdx = cursor.getColumnIndex("name");
+            while (cursor.moveToNext()) {
+                if (fieldName.equals(cursor.getString(nameIdx))) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if (!exists) {
             db.execSQL(String.format("ALTER TABLE %s ADD COLUMN %s", tableName, sql));
         }
-        cursor.close();
     }
 
     private static final java.util.regex.Pattern SQL_IDENTIFIER =
@@ -227,6 +247,16 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     , "synced_cloudlog INTEGER DEFAULT 0");
             alterTable(sqLiteDatabase, "QSLTable", "synced_qrz"
                     , "synced_qrz INTEGER DEFAULT 0");
+            // POTA ADIF fields. MY_SIG/MY_SIG_INFO are the activator's program/park ref;
+            // SIG/SIG_INFO are the worked station's. Empty for non-POTA contacts.
+            alterTable(sqLiteDatabase, "QSLTable", "my_sig"
+                    , "my_sig TEXT");
+            alterTable(sqLiteDatabase, "QSLTable", "my_sig_info"
+                    , "my_sig_info TEXT");
+            alterTable(sqLiteDatabase, "QSLTable", "sig"
+                    , "sig TEXT");
+            alterTable(sqLiteDatabase, "QSLTable", "sig_info"
+                    , "sig_info TEXT");
 
         } else {
             sqLiteDatabase.execSQL("CREATE TABLE QSLTable (\n" +
@@ -251,7 +281,11 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     "freq TEXT,\n" +
                     "station_callsign TEXT,\n" +
                     "my_gridsquare TEXT,\n" +
-                    "comment TEXT)");
+                    "comment TEXT,\n" +
+                    "my_sig TEXT,\n" +//POTA: activator's program ("POTA")
+                    "my_sig_info TEXT,\n" +//POTA: activator's park ref
+                    "sig TEXT,\n" +//POTA: worked station's program
+                    "sig_info TEXT)");//POTA: worked station's park ref
         }
 
 
@@ -431,6 +465,23 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         }
     }
 
+
+    /**
+     * Create POTA activation history table. Each row is one activation session
+     * (start to end) so users can re-export a single activation's ADIF later.
+     */
+    private void createPotaTables(SQLiteDatabase sqLiteDatabase) {
+        if (!checkTableExists(sqLiteDatabase, "pota_activation")) {
+            sqLiteDatabase.execSQL("CREATE TABLE pota_activation (\n" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
+                    "park_ref TEXT NOT NULL,\n" +
+                    "operator TEXT,\n" +
+                    "started_at INTEGER NOT NULL,\n" +//epoch millis
+                    "ended_at INTEGER,\n" +//null while in progress
+                    "qso_count INTEGER DEFAULT 0,\n" +
+                    "notes TEXT)");
+        }
+    }
 
     /**
      * Create indexes to improve import speed
@@ -1042,6 +1093,13 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 }
             }
 
+            // POTA ADIF fields — emitted only when populated so non-POTA rows
+            // remain byte-identical to the prior upload format.
+            appendPotaField(logStr, cursor, "my_sig", "MY_SIG");
+            appendPotaField(logStr, cursor, "my_sig_info", "MY_SIG_INFO");
+            appendPotaField(logStr, cursor, "sig", "SIG");
+            appendPotaField(logStr, cursor, "sig_info", "SIG_INFO");
+
             String comment = cursor.getString(cursor.getColumnIndex("comment"));
 
             //<comment:15>Distance: 99 km <eor>
@@ -1053,6 +1111,15 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
         cursor.close();
         return logStr.toString();
+    }
+
+    /** Append a POTA ADIF field if the column exists and is non-empty. */
+    private static void appendPotaField(StringBuilder sb, Cursor cursor, String column, String adifName) {
+        int idx = cursor.getColumnIndex(column);
+        if (idx < 0) return;
+        String value = cursor.getString(idx);
+        if (value == null || value.isEmpty()) return;
+        sb.append(String.format("<%s:%d>%s ", adifName, value.length(), value));
     }
 
     /**
@@ -1175,6 +1242,12 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             }
             return false;
         }
+        // POTA: if an activation is running, stamp MY_SIG/MY_SIG_INFO; if the worked
+        // station is currently spotted on pota.app, stamp SIG/SIG_INFO too (P2P case).
+        // No-op when no activation/spot, so non-POTA contacts are unaffected.
+        radio.ks3ckc.ft8us.pota.PotaSessionManager.stampQso(
+                record,
+                radio.ks3ckc.ft8us.pota.PotaSpotsRepository.parkRefFor(record.getToCallsign()));
 
         String querySQL;
         if (!checkQSLCallsign(record)) {//If record doesn't exist, add it
@@ -1225,7 +1298,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         if (!checkIsQSL(record)) {//If log data doesn't exist, add it
             querySQL = "INSERT INTO QSLTable(call, isQSL,isLotW_import,isLotW_QSL,gridsquare, mode, rst_sent, rst_rcvd, qso_date, " +
                     "time_on, qso_date_off, time_off, band, freq, station_callsign, my_gridsquare," +
-                    "comment)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                    "comment,my_sig,my_sig_info,sig,sig_info)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
             db.execSQL(querySQL, new String[]{record.getToCallsign()
                     , String.valueOf(record.isQSL ? 1 : 0)
@@ -1244,7 +1317,17 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     , BaseRigOperation.getFrequencyFloat(record.getBandFreq())
                     , record.getMyCallsign()
                     , record.getMyMaidenGrid()
-                    , record.getComment()});
+                    , record.getComment()
+                    , record.getMySig()
+                    , record.getMySigInfo()
+                    , record.getSig()
+                    , record.getSigInfo()});
+            // If this QSO was logged during an active POTA activation, bump its qso_count.
+            if (record.getMySigInfo() != null && !record.getMySigInfo().isEmpty()) {
+                db.execSQL("UPDATE pota_activation SET qso_count = qso_count + 1 "
+                        + "WHERE park_ref = ? AND ended_at IS NULL"
+                        , new Object[]{record.getMySigInfo()});
+            }
             if (afterInsertQSLData!=null){
                 afterInsertQSLData.doAfterInsert(false,true);//New QSL
             }

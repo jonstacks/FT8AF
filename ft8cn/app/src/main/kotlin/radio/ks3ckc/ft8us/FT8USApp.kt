@@ -34,6 +34,7 @@ import radio.ks3ckc.ft8us.ui.components.selectBandIndex
 import radio.ks3ckc.ft8us.ui.decode.DecodeScreen
 import radio.ks3ckc.ft8us.ui.logbook.LogbookScreen
 import radio.ks3ckc.ft8us.ui.map.MapScreen
+import radio.ks3ckc.ft8us.ui.pota.PotaScreen
 import radio.ks3ckc.ft8us.ui.settings.SettingsScreen
 import radio.ks3ckc.ft8us.ui.waterfall.WaterfallScreen
 
@@ -96,6 +97,7 @@ fun FT8USApp(mainViewModel: MainViewModel) {
                     FT8USTab.DECODE -> DecodeScreen(mainViewModel)
                     FT8USTab.MAP -> MapScreen(mainViewModel)
                     FT8USTab.WATERFALL -> WaterfallScreen(mainViewModel)
+                    FT8USTab.POTA -> PotaScreen(mainViewModel)
                     FT8USTab.LOG -> LogbookScreen(mainViewModel)
                     FT8USTab.SETTINGS -> SettingsScreen(mainViewModel)
                 }
