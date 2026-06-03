@@ -28,9 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,23 +84,14 @@ fun ActiveQsoPanel(
 
     val liveCallsign = toCallsign?.callsign ?: "CQ"
 
-    // Remember the last real (non-CQ) callsign so the panel stays visible
-    // after resetToCQ() until isActivated goes false
-    var rememberedCallsign by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(liveCallsign) {
-        if (liveCallsign != "CQ" && liveCallsign.isNotEmpty()) {
-            rememberedCallsign = liveCallsign
-        }
-    }
-    LaunchedEffect(isActivated) {
-        if (!isActivated) {
-            rememberedCallsign = null
-        }
-    }
-
-    // Use the live callsign if it's a real target, otherwise fall back to remembered
-    val displayCallsign = if (liveCallsign != "CQ" && liveCallsign.isNotEmpty()) liveCallsign else rememberedCallsign
+    // displayCallsign is the live target when one is set, null when calling CQ.
+    // We used to remember the last non-CQ callsign across resetToCQ() so the
+    // panel "stayed visible" after a QSO completed — but that made the panel
+    // lie ("Waiting for W1XYZ" while we were actually back to CQ). Now we
+    // just show real state: either a real target or the CQ state below.
+    val displayCallsign = liveCallsign.takeIf { it != "CQ" && it.isNotEmpty() }
     val hasTarget = displayCallsign != null
+    val isCallingCq = isActivated && !hasTarget
 
     // Synthesized TX log: append the message we're currently transmitting
     // the moment TX begins, so the operator sees it in the log without
@@ -212,12 +201,20 @@ fun ActiveQsoPanel(
             // minimized it, the header acts as the "reopen" affordance.
             StationHeader(
                 targetCallsign = when {
+                    isCallingCq -> "Calling CQ"
                     displayCallsign == null -> "Searching..."
                     isTransmitting -> "QSOing with $displayCallsign"
                     else -> "Waiting for $displayCallsign"
                 },
                 snr = if (displayCallsign != null) toCallsign?.snr else null,
                 onClick = if (displayCallsign != null) onReopenSheet else null,
+                onClear = if (displayCallsign != null) {
+                    {
+                        mainViewModel.ft8TransmitSignal.userResetToCQ()
+                        mainViewModel.qsoSheetCallsign.postValue(null)
+                        mainViewModel.qsoSheetMinimized.postValue(false)
+                    }
+                } else null,
             )
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -248,7 +245,12 @@ fun ActiveQsoPanel(
 }
 
 @Composable
-private fun StationHeader(targetCallsign: String, snr: Int?, onClick: (() -> Unit)? = null) {
+private fun StationHeader(
+    targetCallsign: String,
+    snr: Int?,
+    onClick: (() -> Unit)? = null,
+    onClear: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -260,6 +262,7 @@ private fun StationHeader(targetCallsign: String, snr: Int?, onClick: (() -> Uni
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f, fill = false),
         ) {
             Text(
                 text = "QSO",
@@ -285,14 +288,32 @@ private fun StationHeader(targetCallsign: String, snr: Int?, onClick: (() -> Uni
                 )
             }
         }
-        if (onClick != null) {
-            Text(
-                text = "tap to view ↗",
-                color = Accent,
-                fontSize = 10.sp,
-                fontFamily = GeistMonoFamily,
-                fontWeight = FontWeight.SemiBold,
-            )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (onClick != null) {
+                Text(
+                    text = "tap to view ↗",
+                    color = Accent,
+                    fontSize = 10.sp,
+                    fontFamily = GeistMonoFamily,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (onClear != null) {
+                // Tap target uses its own Box so the parent header's reopen
+                // clickable doesn't swallow this gesture.
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onClear)
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FT8USIcons.Close(color = TextMuted, size = 14.dp)
+                }
+            }
         }
     }
 }
