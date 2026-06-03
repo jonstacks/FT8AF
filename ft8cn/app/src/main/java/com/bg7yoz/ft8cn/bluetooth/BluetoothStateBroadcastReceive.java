@@ -22,6 +22,7 @@ import androidx.core.content.ContextCompat;
 import com.bg7yoz.ft8cn.GeneralVariables;
 import com.bg7yoz.ft8cn.MainViewModel;
 import com.bg7yoz.ft8cn.R;
+import com.bg7yoz.ft8cn.connector.ConnectMode;
 import com.bg7yoz.ft8cn.ui.ToastMessage;
 
 public class BluetoothStateBroadcastReceive extends BroadcastReceiver {
@@ -32,6 +33,14 @@ public class BluetoothStateBroadcastReceive extends BroadcastReceiver {
     public BluetoothStateBroadcastReceive(Context context, MainViewModel mainViewModel) {
         this.context = context;
         this.mainViewModel = mainViewModel;
+    }
+
+    // Only react to Bluetooth audio routing / toasts when the user has actually
+    // selected the Bluetooth connect mode. Otherwise users in USB cable mode see
+    // spurious "BT connected/disconnected" toasts and the audio plumbing gets
+    // bounced around. Matches FT8CN PR #168.
+    private boolean shouldHandleBluetoothAudioRouting() {
+        return GeneralVariables.connectMode == ConnectMode.BLUE_TOOTH;
     }
 
     @SuppressLint("MissingPermission")
@@ -62,17 +71,19 @@ public class BluetoothStateBroadcastReceive extends BroadcastReceiver {
             case BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED:
             case BluetoothAdapter.EXTRA_CONNECTION_STATE:
             case BluetoothAdapter.EXTRA_STATE:
-                if(headset == BluetoothProfile.STATE_CONNECTED ||a2dp==BluetoothProfile.STATE_CONNECTED){
-                //if(headset == BluetoothProfile.STATE_CONNECTED){
-                //if(a2dp==BluetoothProfile.STATE_CONNECTED){
-                    mainViewModel.setBlueToothOn();
-                }else {
-                    mainViewModel.setBlueToothOff();
+                if (shouldHandleBluetoothAudioRouting()) {
+                    if(headset == BluetoothProfile.STATE_CONNECTED ||a2dp==BluetoothProfile.STATE_CONNECTED){
+                    //if(headset == BluetoothProfile.STATE_CONNECTED){
+                    //if(a2dp==BluetoothProfile.STATE_CONNECTED){
+                        mainViewModel.setBlueToothOn();
+                    }else {
+                        mainViewModel.setBlueToothOff();
+                    }
                 }
                 break;
 
             case BluetoothDevice.ACTION_ACL_CONNECTED:
-                if (device!=null) {
+                if (shouldHandleBluetoothAudioRouting() && device!=null) {
                     ToastMessage.show(String.format(
                             GeneralVariables.getStringFromResource(R.string.bluetooth_is_connected)
                             ,device.getName()));
@@ -80,7 +91,7 @@ public class BluetoothStateBroadcastReceive extends BroadcastReceiver {
                 break;
 
             case BluetoothDevice.ACTION_ACL_DISCONNECTED:
-                if (device!=null) {
+                if (shouldHandleBluetoothAudioRouting() && device!=null) {
                     ToastMessage.show(String.format(
                             GeneralVariables.getStringFromResource(R.string.bluetooth_is_diconnected)
                             ,device.getName()));
@@ -88,19 +99,23 @@ public class BluetoothStateBroadcastReceive extends BroadcastReceiver {
                 break;
 
             case AudioManager.ACTION_AUDIO_BECOMING_NOISY:
-                ToastMessage.show(GeneralVariables.getStringFromResource(R.string.sound_source_switched));
+                if (shouldHandleBluetoothAudioRouting()) {
+                    ToastMessage.show(GeneralVariables.getStringFromResource(R.string.sound_source_switched));
+                }
                 break;
 
 
             case BluetoothAdapter.ACTION_STATE_CHANGED:
-                int blueState = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, 0);
-                switch (blueState) {
-                    case BluetoothAdapter.STATE_OFF:
-                        ToastMessage.show(GeneralVariables.getStringFromResource(R.string.bluetooth_turn_off));
-                        break;
-                    case BluetoothAdapter.STATE_ON:
-                        ToastMessage.show(GeneralVariables.getStringFromResource(R.string.bluetooth_turn_on));
-                        break;
+                if (shouldHandleBluetoothAudioRouting()) {
+                    int blueState = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, 0);
+                    switch (blueState) {
+                        case BluetoothAdapter.STATE_OFF:
+                            ToastMessage.show(GeneralVariables.getStringFromResource(R.string.bluetooth_turn_off));
+                            break;
+                        case BluetoothAdapter.STATE_ON:
+                            ToastMessage.show(GeneralVariables.getStringFromResource(R.string.bluetooth_turn_on));
+                            break;
+                    }
                 }
                 break;
 

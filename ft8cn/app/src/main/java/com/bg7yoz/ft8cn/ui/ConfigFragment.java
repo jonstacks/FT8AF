@@ -775,6 +775,15 @@ public class ConfigFragment extends Fragment {
                         // Instruction set
                         GeneralVariables.instructionSet = rigNameSpinnerAdapter.getRigName(i).instructionSet;
                         writeConfig("instruction", String.valueOf(GeneralVariables.instructionSet));
+                        // FT-710 requires CAT control: auto-switch if user picks it in another mode.
+                        if (GeneralVariables.instructionSet == InstructionSet.YAESU_FT710
+                                && GeneralVariables.controlMode != ControlMode.CAT) {
+                            GeneralVariables.controlMode = ControlMode.CAT;
+                            writeConfig("ctrMode", String.valueOf(GeneralVariables.controlMode));
+                            mainViewModel.setControlMode();
+                            setControlMode();
+                            setConnectMode();
+                        }
                     }
 
                     @Override
