@@ -1,0 +1,544 @@
+package radio.ks3ckc.ft8us.ui.pota
+
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bg7yoz.ft8cn.GeneralVariables
+import com.bg7yoz.ft8cn.MainViewModel
+import kotlinx.coroutines.launch
+import radio.ks3ckc.ft8us.pota.PotaClient
+import radio.ks3ckc.ft8us.pota.PotaSessionManager
+import radio.ks3ckc.ft8us.pota.PotaSpotsRepository
+import radio.ks3ckc.ft8us.pota.model.PotaActivation
+import radio.ks3ckc.ft8us.pota.model.PotaSpot
+import radio.ks3ckc.ft8us.theme.Accent
+import radio.ks3ckc.ft8us.theme.AccentSoft
+import radio.ks3ckc.ft8us.theme.BgApp
+import radio.ks3ckc.ft8us.theme.BgSurface
+import radio.ks3ckc.ft8us.theme.BgSurface2
+import radio.ks3ckc.ft8us.theme.Border
+import radio.ks3ckc.ft8us.theme.BorderStrong
+import radio.ks3ckc.ft8us.theme.StatusConfirmed
+import radio.ks3ckc.ft8us.theme.TextMuted
+import radio.ks3ckc.ft8us.theme.TextPrimary
+
+private enum class PotaSubTab(val label: String) {
+    ACTIVATE("Activate"),
+    HUNT("Hunt"),
+    HISTORY("History"),
+}
+
+@Composable
+fun PotaScreen(mainViewModel: MainViewModel) {
+    var subTab by rememberSaveable { mutableStateOf(PotaSubTab.ACTIVATE) }
+
+    // Hunter tab and an active activation both rely on fresh spots — start
+    // polling whenever the POTA screen is mounted.
+    DisposableEffect(Unit) {
+        PotaSpotsRepository.start()
+        onDispose { PotaSpotsRepository.stop() }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BgApp)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        PotaTabHeader(subTab = subTab, onTabSelected = { subTab = it })
+        Spacer(Modifier.height(10.dp))
+        when (subTab) {
+            PotaSubTab.ACTIVATE -> ActivateTab()
+            PotaSubTab.HUNT -> HuntTab(mainViewModel)
+            PotaSubTab.HISTORY -> HistoryTab(mainViewModel)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sub-tab chip header
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun PotaTabHeader(subTab: PotaSubTab, onTabSelected: (PotaSubTab) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BgSurface, RoundedCornerShape(10.dp))
+            .border(1.dp, Border, RoundedCornerShape(10.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        for (tab in PotaSubTab.entries) {
+            val selected = tab == subTab
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(
+                        if (selected) AccentSoft else Color.Transparent,
+                        RoundedCornerShape(8.dp),
+                    )
+                    .clickable { onTabSelected(tab) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = tab.label,
+                    color = if (selected) Accent else TextMuted,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Activate tab
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ActivateTab() {
+    val activation by PotaSessionManager.currentActivation.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var parkRef by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    // Refresh the activation's QSO counter periodically while one is running so
+    // the on-screen tally reflects QSOs added by the TX/RX path.
+    LaunchedEffect(activation?.id, refreshKey) {
+        if (activation != null) {
+            kotlinx.coroutines.delay(3000)
+            PotaSessionManager.refreshCounter()
+            refreshKey++
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (activation == null) {
+            Card {
+                SectionTitle("Start activation")
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = parkRef,
+                    onValueChange = { parkRef = it.uppercase().take(10) },
+                    label = { Text("Park reference (e.g. K-1234)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                    colors = textFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it.take(120) },
+                    label = { Text("Notes (optional)") },
+                    singleLine = true,
+                    colors = textFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        val started = PotaSessionManager.start(parkRef, notes.ifBlank { null })
+                        if (started == null) {
+                            Toast.makeText(context, "Enter a park reference first", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Activating ${started.parkRef}", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = BgApp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Start activation", fontWeight = FontWeight.SemiBold) }
+            }
+        } else {
+            ActiveActivationCard(
+                activation = activation!!,
+                onStop = {
+                    PotaSessionManager.end()
+                    Toast.makeText(context, "Activation ended", Toast.LENGTH_SHORT).show()
+                },
+                onSelfSpot = {
+                    val myCall = GeneralVariables.myCallsign ?: ""
+                    if (myCall.isBlank()) {
+                        Toast.makeText(context, "Set your callsign in Settings first", Toast.LENGTH_SHORT).show()
+                    } else {
+                        scope.launch {
+                            val ok = PotaClient.selfSpot(
+                                activator = myCall,
+                                spotter = myCall,
+                                frequencyKhz = GeneralVariables.band / 1000.0,
+                                mode = "FT8",
+                                reference = activation!!.parkRef,
+                                comments = "CQ POTA via FT8AF",
+                            )
+                            Toast.makeText(
+                                context,
+                                if (ok) "Self-spot posted" else "Self-spot failed — check log",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActiveActivationCard(
+    activation: PotaActivation,
+    onStop: () -> Unit,
+    onSelfSpot: () -> Unit,
+) {
+    Card {
+        SectionTitle("ACTIVE — ${activation.parkRef}")
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            StatBlock(
+                label = "QSOs",
+                value = activation.qsoCount.toString(),
+                hint = if (activation.qsoCount >= 10) "valid activation" else "${10 - activation.qsoCount} to valid",
+                valueColor = if (activation.qsoCount >= 10) StatusConfirmed else Accent,
+            )
+            StatBlock(
+                label = "Elapsed",
+                value = formatElapsed(System.currentTimeMillis() - activation.startedAtMs),
+                hint = "since start",
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = onSelfSpot,
+                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = BgApp),
+                modifier = Modifier.weight(1f),
+            ) { Text("Self-spot", fontWeight = FontWeight.SemiBold) }
+            OutlinedButton(
+                onClick = onStop,
+                modifier = Modifier.weight(1f),
+            ) { Text("End activation", color = TextPrimary) }
+        }
+        if (!activation.notes.isNullOrBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "“${activation.notes}”",
+                color = TextMuted,
+                fontSize = 12.sp,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "TX CQ will go out as “CQ POTA ${GeneralVariables.myCallsign ?: ""} ${GeneralVariables.getMyMaidenhead4Grid()}”.",
+            color = TextMuted,
+            fontSize = 11.sp,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hunt tab
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun HuntTab(mainViewModel: MainViewModel) {
+    val spotsMap by PotaSpotsRepository.spotsByCall.collectAsStateWithLifecycle()
+    val spots = remember(spotsMap) { spotsMap.values.sortedBy { it.frequencyKhz } }
+    val context = LocalContext.current
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            text = if (spots.isEmpty()) "No FT8 POTA spots right now." else "${spots.size} active FT8 spots",
+            color = TextMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+        )
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(vertical = 2.dp),
+        ) {
+            items(spots, key = { "${it.activator}-${it.reference}-${it.frequencyKhz}" }) { spot ->
+                SpotRow(spot = spot, onClick = {
+                    // Open the QSO sheet pre-filled with this activator's callsign. Tuning the
+                    // radio is the operator's job — most rigs aren't CAT-controlled by FT8AF
+                    // for frequency changes during a session.
+                    mainViewModel.qsoSheetCallsign.postValue(spot.activator)
+                    Toast.makeText(
+                        context,
+                        "Targeting ${spot.activator} @ ${"%.1f".format(spot.frequencyKhz)} kHz (${spot.reference}) — switch to Decode to call",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                })
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpotRow(spot: PotaSpot, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BgSurface, RoundedCornerShape(10.dp))
+            .border(1.dp, Border, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    spot.activator,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Spacer(Modifier.width(8.dp))
+                ParkPill(spot.reference)
+            }
+            if (spot.parkName.isNotBlank()) {
+                Text(
+                    spot.parkName + if (spot.locationDesc.isNotBlank()) " · ${spot.locationDesc}" else "",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                )
+            }
+            if (spot.comments.isNotBlank()) {
+                Text("“${spot.comments}”", color = TextMuted, fontSize = 11.sp)
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "%.1f kHz".format(spot.frequencyKhz),
+            color = Accent,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// History tab
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun HistoryTab(mainViewModel: MainViewModel) {
+    val context = LocalContext.current
+    var history by remember { mutableStateOf<List<PotaActivation>>(emptyList()) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+    val activation by PotaSessionManager.currentActivation.collectAsStateWithLifecycle()
+
+    // Reload whenever activation state changes (start/end will appear here).
+    LaunchedEffect(refreshKey, activation?.id, activation?.endedAtMs) {
+        history = PotaSessionManager.history()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (history.isEmpty()) {
+            Text(
+                "No past activations yet.",
+                color = TextMuted,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(8.dp),
+            )
+        }
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            items(history, key = { it.id }) { row ->
+                HistoryRow(
+                    row = row,
+                    onOpenUploadPage = {
+                        runCatching {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://pota.app/#/user/upload"))
+                            context.startActivity(intent)
+                        }.onFailure {
+                            Toast.makeText(context, "No browser available", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onShareAdif = {
+                        PotaAdifExporter.shareActivationAdif(context, mainViewModel, row) { ok ->
+                            if (!ok) Toast.makeText(context, "Export failed — check log", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(
+    row: PotaActivation,
+    onOpenUploadPage: () -> Unit,
+    onShareAdif: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BgSurface, RoundedCornerShape(10.dp))
+            .border(1.dp, Border, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ParkPill(row.parkRef)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (row.isActive) "active" else "${row.qsoCount} QSO",
+                    color = if (row.isActive) Accent else TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                )
+            }
+            Text(formatDateRange(row), color = TextMuted, fontSize = 11.sp)
+        }
+        if (!row.notes.isNullOrBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text("“${row.notes}”", color = TextMuted, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = onShareAdif, modifier = Modifier.weight(1f)) {
+                Text("Share ADIF", color = TextPrimary, fontSize = 12.sp)
+            }
+            OutlinedButton(onClick = onOpenUploadPage, modifier = Modifier.weight(1f)) {
+                Text("Open pota.app", color = TextPrimary, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun Card(content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BgSurface, RoundedCornerShape(12.dp))
+            .border(1.dp, BorderStrong, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun StatBlock(label: String, value: String, hint: String, valueColor: Color = TextPrimary) {
+    Column(horizontalAlignment = Alignment.Start) {
+        Text(label, color = TextMuted, fontSize = 11.sp)
+        Text(value, color = valueColor, fontSize = 24.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        Text(hint, color = TextMuted, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun ParkPill(ref: String) {
+    Text(
+        ref,
+        color = StatusConfirmed,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .background(BgSurface2, RoundedCornerShape(6.dp))
+            .border(1.dp, Border, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        fontFamily = FontFamily.Monospace,
+    )
+}
+
+@Composable
+private fun textFieldColors() = TextFieldDefaults.colors(
+    focusedTextColor = TextPrimary,
+    unfocusedTextColor = TextPrimary,
+    focusedContainerColor = BgSurface2,
+    unfocusedContainerColor = BgSurface2,
+    focusedLabelColor = Accent,
+    unfocusedLabelColor = TextMuted,
+    focusedIndicatorColor = Accent,
+    unfocusedIndicatorColor = Border,
+    cursorColor = Accent,
+)
+
+private fun formatElapsed(ms: Long): String {
+    val totalSec = (ms / 1000).coerceAtLeast(0)
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+private fun formatDateRange(row: PotaActivation): String {
+    val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+    val start = fmt.format(java.util.Date(row.startedAtMs))
+    val end = row.endedAtMs?.let { fmt.format(java.util.Date(it)) } ?: "—"
+    return "$start → $end"
+}

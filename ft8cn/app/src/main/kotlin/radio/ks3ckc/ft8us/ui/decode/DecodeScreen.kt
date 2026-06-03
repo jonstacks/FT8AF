@@ -19,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
@@ -58,8 +59,16 @@ fun DecodeScreen(
     val utcTime by mainViewModel.timerSec.observeAsState(0L)
 
     // Filter state
-    val filterOptions = listOf("All", "CQ Calls", "New DXCC", "Needed", "For Me")
+    val filterOptions = listOf("All", "CQ Calls", "CQ POTA", "New DXCC", "Needed", "For Me")
     var selectedFilter by rememberSaveable { mutableStateOf("All") }
+
+    // Keep the POTA spots cache warm while the user is browsing decodes so the
+    // CQ POTA filter and the green POTA pill on spotted activators work even
+    // without visiting the POTA tab. Ref-counted with the POTA screen.
+    DisposableEffect(Unit) {
+        radio.ks3ckc.ft8us.pota.PotaSpotsRepository.start()
+        onDispose { radio.ks3ckc.ft8us.pota.PotaSpotsRepository.stop() }
+    }
 
     // Bottom-sheet state lives in the ViewModel so it survives navigation
     // away from this screen during an active QSO.
@@ -307,6 +316,17 @@ private fun filterMessages(
 ): List<Ft8Message> {
     return when (filter) {
         "CQ Calls" -> messages.filter { it.checkIsCQ() }
+        "CQ POTA" -> messages.filter {
+            // Match three signals: (1) explicit "POTA" suffix on a CQ, (2) any CQ from a
+            // station currently spotted on pota.app (activators often drop the suffix to
+            // save chars), (3) free-text fragments like "CQ POT" that decoders garble
+            // when the activator's call is long.
+            it.checkIsCQ() && (
+                it.modifier == "POTA" ||
+                    radio.ks3ckc.ft8us.pota.PotaSpotsRepository.parkRefFor(it.callsignFrom) != null ||
+                    (it.callsignTo?.startsWith("CQ POT", ignoreCase = true) == true)
+                )
+        }
         "New DXCC" -> messages.filter { it.checkIsCQ() && it.fromDxcc }
         "Needed" -> messages.filter {
             !it.isQSL_Callsign &&
@@ -330,7 +350,8 @@ private fun EmptyState(
 ) {
     val (title, subtitle) = when (selectedFilter) {
         "CQ Calls" -> "No CQ calls" to "No stations are calling CQ on this band right now."
-        "New DXCC" -> "No new DXCC" to "No unworked DXCC entities have been decoded yet."
+        "CQ POTA" -> "No POTA spots" to "No park activations decoded on this band yet — open POTA → Hunt for the spot list."
+    "New DXCC" -> "No new DXCC" to "No unworked DXCC entities have been decoded yet."
         "Needed" -> "Nothing needed" to "No stations needing confirmation found."
         "For Me" -> "No calls for you" to "No stations are calling your callsign right now."
         else -> "No signals decoded" to "Waiting for FT8 signals to appear..."

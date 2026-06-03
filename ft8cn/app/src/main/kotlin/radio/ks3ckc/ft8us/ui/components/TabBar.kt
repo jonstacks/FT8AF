@@ -41,6 +41,7 @@ enum class FT8USTab(val label: String) {
     DECODE("Decode"),
     MAP("Map"),
     WATERFALL("Waterfall"),
+    POTA("POTA"),
     LOG("Logbook"),
     SETTINGS("Settings"),
 }
@@ -163,6 +164,7 @@ fun TabBar(
                         FT8USTab.DECODE -> FT8USIcons.Decode(color = color, strokeWidth = strokeWidth)
                         FT8USTab.MAP -> FT8USIcons.Globe(color = color, strokeWidth = strokeWidth)
                         FT8USTab.WATERFALL -> FT8USIcons.Waterfall(color = color, strokeWidth = strokeWidth)
+                        FT8USTab.POTA -> FT8USIcons.Tree(color = color, strokeWidth = strokeWidth)
                         FT8USTab.LOG -> FT8USIcons.Book(color = color, strokeWidth = strokeWidth)
                         FT8USTab.SETTINGS -> FT8USIcons.Cog(color = color, strokeWidth = strokeWidth)
                     }
