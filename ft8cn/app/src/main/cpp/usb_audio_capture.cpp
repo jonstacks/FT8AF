@@ -421,7 +421,15 @@ struct OutputSession {
     libusb_context*       ctx        = nullptr;
     libusb_device_handle* handle     = nullptr;
     int                   endpoint   = 0;
-    int                   maxPktSize = 0;
+    // Bytes the device expects per USB iso frame. Computed from the audio
+    // format (sampleRate * channels * bytesPerSample / 1000 for USB FS).
+    // NOT the same as the endpoint's wMaxPacketSize, which is the device's
+    // upper bound — sending wMaxPacketSize per frame makes the device clock
+    // out samples at ~wMaxPacketSize/realFrame samples-per-frame, i.e.
+    // faster than the negotiated sample rate, shifting every audio tone up
+    // by the same ratio. For FT8 that pushes the message off WSJT-X's
+    // tone grid (6.25 Hz spacing → ~6.51 Hz) and decoders see noise.
+    int                   bytesPerFrame = 0;
     const uint8_t*        pcm        = nullptr;
     int                   pcmLen     = 0;
     int                   pcmOffset  = 0;
@@ -453,7 +461,7 @@ void LIBUSB_CALL onOutputComplete(libusb_transfer* xfer) {
         return;
     }
 
-    int chunkBytes = kPacketsPerOutputTransfer * s->maxPktSize;
+    int chunkBytes = kPacketsPerOutputTransfer * s->bytesPerFrame;
     int remaining  = s->pcmLen - s->pcmOffset;
     int thisChunk  = std::min(chunkBytes, remaining);
 
@@ -482,13 +490,33 @@ Java_com_bg7yoz_ft8cn_wave_UsbAudioNative_nativeWrite(
         jint /*altSetting*/,
         jint endpointAddress,
         jint maxPacketSize,
-        jint /*outputSampleRate*/,
-        jint /*outputChannels*/,
-        jint /*outputBytesPerSample*/,
+        jint outputSampleRate,
+        jint outputChannels,
+        jint outputBytesPerSample,
         jbyteArray pcmArray) {
 
     if (!pcmArray) return LIBUSB_ERROR_INVALID_PARAM;
     if (maxPacketSize <= 0) return LIBUSB_ERROR_INVALID_PARAM;
+
+    // USB full-speed iso = 1 packet per 1ms frame. The amount of audio data
+    // per packet must equal the *negotiated* sample rate × channels × bytes,
+    // not the endpoint's wMaxPacketSize. The previous code used maxPktSize
+    // for both buffer sizing and packet length, which made the device clock
+    // out samples at maxPktSize/realFrameBytes faster than negotiated — e.g.
+    // 200/192 = 1.0417× at 48 kHz stereo 16-bit, time-stretching FT8 tones
+    // by 4% and pushing them off WSJT-X's 6.25 Hz grid (decoders see noise).
+    int bytesPerFrame = (outputSampleRate * outputChannels * outputBytesPerSample) / 1000;
+    if (bytesPerFrame <= 0 || bytesPerFrame > maxPacketSize) {
+        // Bad format args, or device's max is somehow smaller than the data
+        // rate. Fall back to the old behavior; better wrong-pitch audio than
+        // silent abort. Log so the dev screen surfaces it.
+        LOGE("nativeWrite: bad audio format rate=%d ch=%d bps=%d maxPkt=%d, "
+             "falling back to maxPkt for packet length (audio will play at "
+             "wrong rate; expect undecodable FT8)",
+             outputSampleRate, outputChannels, outputBytesPerSample,
+             maxPacketSize);
+        bytesPerFrame = maxPacketSize;
+    }
 
     libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
 
@@ -519,13 +547,13 @@ Java_com_bg7yoz_ft8cn_wave_UsbAudioNative_nativeWrite(
     }
 
     OutputSession s;
-    s.ctx        = ctx;
-    s.handle     = handle;
-    s.endpoint   = endpointAddress;
-    s.maxPktSize = maxPacketSize;
-    s.pcm        = reinterpret_cast<const uint8_t*>(pcmBytes);
-    s.pcmLen     = (int)pcmLen;
-    s.pcmOffset  = 0;
+    s.ctx           = ctx;
+    s.handle        = handle;
+    s.endpoint      = endpointAddress;
+    s.bytesPerFrame = bytesPerFrame;
+    s.pcm           = reinterpret_cast<const uint8_t*>(pcmBytes);
+    s.pcmLen        = (int)pcmLen;
+    s.pcmOffset     = 0;
 
     libusb_transfer* xfers[kNumOutputTransfers] = {nullptr};
     int submitted = 0;
@@ -537,7 +565,7 @@ Java_com_bg7yoz_ft8cn_wave_UsbAudioNative_nativeWrite(
             s.firstError.compare_exchange_strong(expect, LIBUSB_ERROR_NO_MEM);
             continue;
         }
-        int chunkBytes = kPacketsPerOutputTransfer * s.maxPktSize;
+        int chunkBytes = kPacketsPerOutputTransfer * s.bytesPerFrame;
         auto* buf = static_cast<uint8_t*>(std::malloc(chunkBytes));
         if (!buf) {
             libusb_free_transfer(xfers[i]);
@@ -559,7 +587,7 @@ Java_com_bg7yoz_ft8cn_wave_UsbAudioNative_nativeWrite(
                 xfers[i], handle, (unsigned char)s.endpoint,
                 buf, chunkBytes, kPacketsPerOutputTransfer,
                 onOutputComplete, &s, /*timeout=*/0);
-        libusb_set_iso_packet_lengths(xfers[i], s.maxPktSize);
+        libusb_set_iso_packet_lengths(xfers[i], s.bytesPerFrame);
         xfers[i]->flags = LIBUSB_TRANSFER_FREE_BUFFER;
 
         int rcSub = libusb_submit_transfer(xfers[i]);
