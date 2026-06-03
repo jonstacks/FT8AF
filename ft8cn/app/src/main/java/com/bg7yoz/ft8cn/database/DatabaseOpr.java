@@ -54,7 +54,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
     public static synchronized DatabaseOpr getInstance(@Nullable Context context, @Nullable String databaseName) {
         if (instance == null) {
-            instance = new DatabaseOpr(context, databaseName, null, 17);
+            instance = new DatabaseOpr(context, databaseName, null, 18);
         }
         return instance;
     }
@@ -162,18 +162,32 @@ public class DatabaseOpr extends SQLiteOpenHelper {
      * @param sql       column definition SQL
      */
     private void alterTable(SQLiteDatabase db, String tableName, String fieldName, String sql) {
-        // Identifiers are interpolated into ALTER TABLE because SQLite cannot bind them; restrict
-        // to simple SQL identifiers so a stray caller can never inject statements.
+        // Identifiers are interpolated into ALTER TABLE and PRAGMA because SQLite cannot bind them;
+        // restrict to simple SQL identifiers so a stray caller can never inject statements.
         if (!SQL_IDENTIFIER.matcher(tableName).matches()
                 || !SQL_IDENTIFIER.matcher(fieldName).matches()) {
             throw new IllegalArgumentException("Invalid SQL identifier");
         }
-        Cursor cursor = db.rawQuery("select * from sqlite_master where name=? and sql like ?"
-                , new String[]{tableName, "%" + fieldName + "%"});
-        if (!cursor.moveToNext()) {
+        // Query the live schema. The previous LIKE-on-sqlite_master.sql approach was broken
+        // two ways: sqlite_master.sql freezes the original CREATE TABLE text and never
+        // reflects ALTER TABLE ADD COLUMN, and the unanchored substring match treated
+        // `sig` as already present whenever `my_sig` was in the original CREATE — so the
+        // `sig`/`sig_info` columns were never added on upgraded installs and POTA QSO
+        // inserts crashed with "no column named sig".
+        boolean exists = false;
+        try (Cursor cursor = db.rawQuery(
+                String.format("PRAGMA table_info(%s)", tableName), null)) {
+            int nameIdx = cursor.getColumnIndex("name");
+            while (cursor.moveToNext()) {
+                if (fieldName.equals(cursor.getString(nameIdx))) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if (!exists) {
             db.execSQL(String.format("ALTER TABLE %s ADD COLUMN %s", tableName, sql));
         }
-        cursor.close();
     }
 
     private static final java.util.regex.Pattern SQL_IDENTIFIER =

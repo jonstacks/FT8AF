@@ -415,6 +415,10 @@ public class ShareLogs {
         if (idx < 0) return;
         String value = cursor.getString(idx);
         if (value == null || value.isEmpty()) return;
-        out.write(String.format("<%s:%d>%s ", adifName, value.length(), value).getBytes());
+        // ADIF length is in bytes; value.length() (UTF-16 code units) would mis-tag any
+        // non-ASCII content and misalign the following field.
+        byte[] valueBytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.write(String.format("<%s:%d>%s ", adifName, valueBytes.length, value)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }

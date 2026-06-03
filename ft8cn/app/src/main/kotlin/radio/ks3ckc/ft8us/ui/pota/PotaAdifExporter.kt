@@ -116,6 +116,9 @@ object PotaAdifExporter {
 
     private fun adifField(sb: StringBuilder, name: String, value: String?) {
         if (value.isNullOrEmpty()) return
-        sb.append("<").append(name).append(":").append(value.length).append(">").append(value).append(" ")
+        // ADIF length is in bytes, not characters — `value.length` (UTF-16 code units)
+        // would mis-tag any non-ASCII content and misalign the following field.
+        val bytes = value.toByteArray(Charsets.UTF_8).size
+        sb.append("<").append(name).append(":").append(bytes).append(">").append(value).append(" ")
     }
 }

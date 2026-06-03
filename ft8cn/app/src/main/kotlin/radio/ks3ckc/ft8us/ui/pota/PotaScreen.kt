@@ -217,7 +217,10 @@ private fun ActivateTab() {
                             val ok = PotaClient.selfSpot(
                                 activator = myCall,
                                 spotter = myCall,
-                                frequencyKhz = GeneralVariables.band / 1000.0,
+                                // getBaseFrequency() = carrier + audio offset, in Hz — the
+                                // actual TX QRG. Using band/1000 here posted the band
+                                // centre and put hunters off-frequency by the audio offset.
+                                frequencyKhz = GeneralVariables.getBaseFrequency() / 1000.0,
                                 mode = "FT8",
                                 reference = activation!!.parkRef,
                                 comments = "CQ POTA via FT8AF",
