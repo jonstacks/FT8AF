@@ -56,7 +56,7 @@ public class GeneralVariables {
     public static int usbAudioOutputProductId = 0;
 
     public static MutableLiveData<Float> mutableVolumePercent = new MutableLiveData<>();
-    public static float volumePercent = 0.5f;//Audio playback volume, as a percentage
+    public static float volumePercent = 0.8f;//Audio playback volume, as a percentage
 
     public static int flexMaxRfPower = 10;//Flex radio max transmit power
     public static int flexMaxTunePower = 10;//Flex radio max tune power

@@ -419,12 +419,25 @@ public class FT8TransmitSignal {
             return;
         }
 
-        // USB audio output path
+        // USB audio output path. Logged so a dev-screen reader can see
+        // which branch was taken — the difference between TX going out
+        // the USB radio (this branch) vs. Android's default sink (the
+        // AudioTrack branch below) was the whole reason for #84, and we
+        // currently have no way to tell from debug.log which one fired.
+        GeneralVariables.fileLog(String.format(
+                "playFT8Signal: TX path branch: audioOutputDeviceId=%d "
+                        + "usbAudioOutputVidPid=%04X:%04X",
+                GeneralVariables.audioOutputDeviceId,
+                GeneralVariables.usbAudioOutputVendorId,
+                GeneralVariables.usbAudioOutputProductId));
         if (GeneralVariables.audioOutputDeviceId == -1
                 && GeneralVariables.usbAudioOutputVendorId != 0) {
+            GeneralVariables.fileLog("playFT8Signal: using USB audio (direct) output");
             playViaUsbAudio(buffer);
             return;
         }
+        GeneralVariables.fileLog(
+                "playFT8Signal: using AudioTrack output (Android default sink)");
 
         Log.d(TAG, String.format("playFT8Signal: Preparing sound card playback... bit depth: %s, sample rate: %d"
                 , GeneralVariables.audioOutput32Bit ? "Float32" : "Int16"
@@ -506,14 +519,15 @@ public class FT8TransmitSignal {
      * Play FT8 signal through USB audio device.
      */
     private void playViaUsbAudio(float[] buffer) {
-        Log.d(TAG, String.format("playFT8Signal: USB audio output, VID=%04X PID=%04X, samples=%d, rate=%d",
+        GeneralVariables.fileLog(String.format(
+                "playViaUsbAudio: start, VID=%04X PID=%04X samples=%d rate=%d",
                 GeneralVariables.usbAudioOutputVendorId,
                 GeneralVariables.usbAudioOutputProductId,
                 buffer.length, GeneralVariables.audioSampleRate));
 
         Context context = GeneralVariables.getMainContext();
         if (context == null) {
-            Log.e(TAG, "No context for USB audio");
+            GeneralVariables.fileLog("playViaUsbAudio: ABORT no main context");
             afterPlayAudio();
             return;
         }
@@ -522,38 +536,56 @@ public class FT8TransmitSignal {
                 GeneralVariables.usbAudioOutputVendorId,
                 GeneralVariables.usbAudioOutputProductId);
         if (device == null) {
-            Log.e(TAG, "USB audio output device not found");
+            GeneralVariables.fileLog(String.format(
+                    "playViaUsbAudio: ABORT USB audio output device not found "
+                            + "by VID:PID %04X:%04X",
+                    GeneralVariables.usbAudioOutputVendorId,
+                    GeneralVariables.usbAudioOutputProductId));
             afterPlayAudio();
             return;
         }
 
         UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
-        if (usbManager == null || !usbManager.hasPermission(device)) {
-            Log.e(TAG, "No USB permission for audio output device");
+        if (usbManager == null) {
+            GeneralVariables.fileLog("playViaUsbAudio: ABORT UsbManager is null");
+            afterPlayAudio();
+            return;
+        }
+        if (!usbManager.hasPermission(device)) {
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT no USB permission for output device "
+                            + "(re-pick (USB direct) in Settings to re-grant)");
             afterPlayAudio();
             return;
         }
 
         UsbAudioDevice usbDev = new UsbAudioDevice();
         if (!usbDev.open(context, device)) {
-            Log.e(TAG, "Failed to open USB audio output device");
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT UsbAudioDevice.open() failed "
+                            + "(descriptor parse or claimInterface failed)");
             afterPlayAudio();
             return;
         }
 
         if (!usbDev.hasOutput()) {
-            Log.e(TAG, "USB audio device has no output endpoint");
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT device has no output endpoint");
             usbDev.close();
             afterPlayAudio();
             return;
         }
 
         if (!usbDev.activateOutput(48000)) {
-            Log.e(TAG, "Failed to activate USB audio output");
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT activateOutput(48000) failed "
+                            + "(alt-setting select or rate setup failed)");
             usbDev.close();
             afterPlayAudio();
             return;
         }
+        GeneralVariables.fileLog(
+                "playViaUsbAudio: device opened, output activated at 48000 Hz");
 
         // Skip leading samples if we started transmitting late, so audio still ends on the cycle boundary.
         int skipSamples = (lateStartSkipMs * GeneralVariables.audioSampleRate) / 1000;
@@ -567,10 +599,12 @@ public class FT8TransmitSignal {
             volumeAdjusted[i] = buffer[skipSamples + i] * GeneralVariables.volumePercent;
         }
 
+        GeneralVariables.fileLog(String.format(
+                "playViaUsbAudio: calling writeAudio playLength=%d rate=%d",
+                playLength, GeneralVariables.audioSampleRate));
         boolean success = usbDev.writeAudio(volumeAdjusted, GeneralVariables.audioSampleRate);
-        if (!success) {
-            Log.e(TAG, "USB audio write failed");
-        }
+        GeneralVariables.fileLog(
+                "playViaUsbAudio: writeAudio returned " + (success ? "OK" : "FAILED"));
 
         usbDev.close();
         afterPlayAudio();

@@ -21,6 +21,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -418,22 +420,23 @@ fun SettingsScreen(
     }
 
     // -- TX Volume Editor --
+    // Slider-based dialog with live update: dragging the thumb updates the
+    // in-memory volumePercent immediately so the next TX uses the new level,
+    // and we persist to the config DB on dismiss. Tapping outside the dialog
+    // or "Done" both commit. There's no "Cancel" because muscle-memory adjust
+    // is the whole point — if you dragged it, you meant it.
     if (showTxVolume) {
-        NumberInputDialog(
-            title = "TX Volume",
-            suffix = "%",
+        TxVolumeSliderDialog(
             initialValue = txVolume,
-            min = 0,
-            max = 100,
-            onDismiss = { showTxVolume = false },
-            onSave = { value ->
+            onChange = { value ->
+                txVolume = value
+                GeneralVariables.volumePercent = value / 100f
+                GeneralVariables.mutableVolumePercent.postValue(value / 100f)
+            },
+            onDismiss = {
                 showTxVolume = false
-                val clamped = value.coerceIn(0, 100)
-                txVolume = clamped
-                GeneralVariables.volumePercent = clamped / 100f
-                GeneralVariables.mutableVolumePercent.postValue(clamped / 100f)
-                mainViewModel.databaseOpr.writeConfig("volumeValue", clamped.toString(), null)
-                mainViewModel.baseRig?.connector?.setRFVolume(clamped)
+                mainViewModel.databaseOpr.writeConfig("volumeValue", txVolume.toString(), null)
+                mainViewModel.baseRig?.connector?.setRFVolume(txVolume)
             },
         )
     }
@@ -866,6 +869,14 @@ fun SettingsScreen(
                                 showAudioOutputPicker = true
                             },
                         )
+                        SectionDivider()
+                        SettingsRow(
+                            label = "TX Volume",
+                            description = "Transmit audio level (hardware buttons ±5%)",
+                            value = "$txVolume%",
+                            showChevron = true,
+                            onClick = { showTxVolume = true },
+                        )
                     }
                 }
             }
@@ -904,14 +915,6 @@ fun SettingsScreen(
                             else "$noReplyLimit tries",
                             showChevron = true,
                             onClick = { showStopAfter = true },
-                        )
-                        SectionDivider()
-                        SettingsRow(
-                            label = "TX Volume",
-                            description = "Transmit audio level (hardware buttons ±5%)",
-                            value = "$txVolume%",
-                            showChevron = true,
-                            onClick = { showTxVolume = true },
                         )
                     }
                 }
@@ -1751,7 +1754,81 @@ private fun SerialPortPickerDialog(
 }
 
 /**
- * Simple informational dialog with a dismiss button.
+ * Slider-based TX volume editor with live update. Dragging commits the new
+ * level immediately (no Save/Cancel friction — the next TX uses what you
+ * dialed); we persist to the config DB only on dismiss.
+ */
+@Composable
+private fun TxVolumeSliderDialog(
+    initialValue: Int,
+    onChange: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var current by remember { mutableIntStateOf(initialValue) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgSurface2)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = "TX Volume",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+            )
+
+            // Big live readout so you can dial it in at a glance — useful in
+            // the car where the slider thumb is small relative to the radio's
+            // ALC meter you're watching at the same time.
+            Text(
+                text = "$current%",
+                color = Accent,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 48.sp,
+            )
+
+            Slider(
+                value = current.toFloat(),
+                onValueChange = { v ->
+                    val clamped = v.toInt().coerceIn(0, 100)
+                    if (clamped != current) {
+                        current = clamped
+                        onChange(clamped)
+                    }
+                },
+                valueRange = 0f..100f,
+                colors = SliderDefaults.colors(
+                    thumbColor = Accent,
+                    activeTrackColor = Accent,
+                ),
+            )
+
+            Text(
+                text = "Adjust live — your next TX uses this level. " +
+                    "Watch your radio's ALC and dial down until it's just kissing the line.",
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Done", color = Accent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Generic informational dialog: title + body text + dismiss.
  */
 @Composable
 private fun InfoDialog(
@@ -1840,6 +1917,21 @@ private fun AboutDialog(
                         onToggleDebug()
                     }
                 },
+            )
+
+            Text(
+                text = "Website",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+            )
+            Text(
+                text = "ft8af.app",
+                color = Accent,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { uriHandler.openUri("https://ft8af.app") },
             )
 
             Text(
