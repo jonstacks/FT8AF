@@ -1248,6 +1248,26 @@ private fun CloudlogSettingsDialog(
     var isTesting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // Station picker state
+    var stationList by remember { mutableStateOf<List<ThirdPartyService.StationProfile>>(emptyList()) }
+    var isFetchingStations by remember { mutableStateOf(false) }
+    var manualStationEntry by remember { mutableStateOf(false) }
+    var showStationPicker by remember { mutableStateOf(false) }
+
+    // Auto-fetch stations on dialog open if credentials are present
+    LaunchedEffect(Unit) {
+        val addr = initialAddress.trim()
+        val key = initialApiKey.trim()
+        if (addr.isNotBlank() && key.isNotBlank()) {
+            isFetchingStations = true
+            val result = withContext(Dispatchers.IO) {
+                ThirdPartyService.FetchCloudlogStations(addr, key)
+            }
+            stationList = result
+            isFetchingStations = false
+        }
+    }
+
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = TextPrimary,
         unfocusedTextColor = TextPrimary,
@@ -1286,6 +1306,7 @@ private fun CloudlogSettingsDialog(
                 onValueChange = {
                     addressInput = it
                     testResult = null
+                    stationList = emptyList()
                 },
                 label = { Text("Server Address") },
                 placeholder = { Text("https://log.example.com/", color = TextFaint) },
@@ -1301,6 +1322,7 @@ private fun CloudlogSettingsDialog(
                 onValueChange = {
                     apiKeyInput = it
                     testResult = null
+                    stationList = emptyList()
                 },
                 label = { Text("API Key") },
                 placeholder = { Text("Your Cloudlog API key", color = TextFaint) },
@@ -1310,19 +1332,79 @@ private fun CloudlogSettingsDialog(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            OutlinedTextField(
-                value = stationIdInput,
-                onValueChange = {
-                    stationIdInput = it
-                    testResult = null
-                },
-                label = { Text("Station ID") },
-                placeholder = { Text("e.g. 1", color = TextFaint) },
-                singleLine = true,
-                colors = fieldColors,
-                textStyle = TextStyle(fontSize = 14.sp),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // Station ID: picker when stations are loaded, manual entry otherwise
+            if (isFetchingStations) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(vertical = 4.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.width(16.dp).height(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Accent,
+                    )
+                    Text(
+                        text = "Loading stations...",
+                        color = TextMuted,
+                        fontSize = 13.sp,
+                    )
+                }
+            } else if (stationList.isNotEmpty() && !manualStationEntry) {
+                // Picker mode: show selected station as a clickable read-only field
+                val selectedLabel = stationList
+                    .firstOrNull { it.stationId == stationIdInput.text }
+                    ?.displayLabel()
+                    ?: stationIdInput.text.ifBlank { "Select a station" }
+
+                Column {
+                    Text(
+                        text = "Station ID",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = selectedLabel,
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(BgSurface3)
+                            .clickable { showStationPicker = true }
+                            .padding(12.dp),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Enter manually",
+                        color = Accent,
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable { manualStationEntry = true },
+                    )
+                }
+            } else {
+                // Manual entry mode
+                OutlinedTextField(
+                    value = stationIdInput,
+                    onValueChange = { stationIdInput = it },
+                    label = { Text("Station ID") },
+                    placeholder = { Text("e.g. 1", color = TextFaint) },
+                    singleLine = true,
+                    colors = fieldColors,
+                    textStyle = TextStyle(fontSize = 14.sp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (stationList.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Choose from server",
+                        color = Accent,
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable { manualStationEntry = false },
+                    )
+                }
+            }
 
             // Test Connection button
             Row(
@@ -1343,6 +1425,18 @@ private fun CloudlogSettingsDialog(
                             }
                             testResult = result
                             isTesting = false
+                            // On success, also fetch station profiles
+                            if (result) {
+                                isFetchingStations = true
+                                val stations = withContext(Dispatchers.IO) {
+                                    ThirdPartyService.FetchCloudlogStations(
+                                        addressInput.text.trim(),
+                                        apiKeyInput.text.trim(),
+                                    )
+                                }
+                                stationList = stations
+                                isFetchingStations = false
+                            }
                         }
                     },
                     enabled = !isTesting,
@@ -1393,6 +1487,22 @@ private fun CloudlogSettingsDialog(
                 }
             }
         }
+    }
+
+    // Station picker dialog
+    if (showStationPicker && stationList.isNotEmpty()) {
+        val items = stationList.map { it.displayLabel() }
+        val selectedIdx = stationList.indexOfFirst { it.stationId == stationIdInput.text }
+        ListPickerDialog(
+            title = "Station Profile",
+            items = items,
+            selectedIndex = selectedIdx.coerceAtLeast(0),
+            onDismiss = { showStationPicker = false },
+            onSelect = { index ->
+                stationIdInput = TextFieldValue(stationList[index].stationId)
+                showStationPicker = false
+            },
+        )
     }
 }
 
