@@ -113,6 +113,7 @@ fun SettingsScreen(
     var autoUpdateGridFromGPS by remember { mutableStateOf(GeneralVariables.autoUpdateGridFromGPS) }
     var enableCloudlog by remember { mutableStateOf(GeneralVariables.enableCloudlog) }
     var enableQRZ by remember { mutableStateOf(GeneralVariables.enableQRZ) }
+    var enablePskReporter by remember { mutableStateOf(GeneralVariables.enablePskReporter) }
     var saveSWLMessage by remember { mutableStateOf(GeneralVariables.saveSWLMessage) }
     var saveSWL_QSO by remember { mutableStateOf(GeneralVariables.saveSWL_QSO) }
 
@@ -983,6 +984,19 @@ fun SettingsScreen(
                                 GeneralVariables.saveSWL_QSO = checked
                                 mainViewModel.databaseOpr.writeConfig(
                                     "saveSWLQSO", if (checked) "1" else "0", null,
+                                )
+                            },
+                        )
+                        SectionDivider()
+                        SettingsRow(
+                            label = "PSKReporter",
+                            description = "Upload decoded spots to pskreporter.info",
+                            toggle = enablePskReporter,
+                            onToggleChange = { checked ->
+                                enablePskReporter = checked
+                                GeneralVariables.enablePskReporter = checked
+                                mainViewModel.databaseOpr.writeConfig(
+                                    "enablePskReporter", if (checked) "1" else "0", null,
                                 )
                             },
                         )
