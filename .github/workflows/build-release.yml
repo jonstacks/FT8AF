@@ -50,13 +50,14 @@ jobs:
 
       - name: Upload coverage to Codecov
         continue-on-error: true
+        id: codecov
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ft8cn/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
 
       - name: Upload test reports on failure
-        if: failure()
+        if: steps.codecov.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: unit-test-reports
