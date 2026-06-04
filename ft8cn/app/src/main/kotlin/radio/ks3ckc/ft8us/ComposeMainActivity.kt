@@ -86,12 +86,26 @@ class ComposeMainActivity : ComponentActivity() {
         mainViewModel = MainViewModel.getInstance(this)
         ToastMessage.getInstance()
 
-        // Register back press handler for exit confirmation. The dialog itself
-        // is rendered in the Compose tree below; the back press just flips a
-        // state flag so the UI can show our styled ExitConfirmDialog rather
-        // than the stock platform AlertDialog.
+        // Register back press handler. Priority: dismiss the QSO sheet if
+        // it's open, otherwise show exit confirm. Without this, back-from-
+        // sheet tries to exit the whole app, which surprises users who
+        // expect back to peel off the foreground overlay first.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                val sheetCs = mainViewModel.qsoSheetCallsign.value
+                val sheetMinimized = mainViewModel.qsoSheetMinimized.value == true
+                if (sheetCs != null && !sheetMinimized) {
+                    // Mirror DecodeScreen.onDismiss: minimize when a QSO is
+                    // live so the panel header stays reopenable; fully clear
+                    // otherwise.
+                    if (mainViewModel.ft8TransmitSignal.isActivated) {
+                        mainViewModel.qsoSheetMinimized.postValue(true)
+                    } else {
+                        mainViewModel.qsoSheetCallsign.postValue(null)
+                        mainViewModel.qsoSheetMinimized.postValue(false)
+                    }
+                    return
+                }
                 showExitConfirm.value = true
             }
         })

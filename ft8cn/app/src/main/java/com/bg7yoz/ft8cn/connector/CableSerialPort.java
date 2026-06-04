@@ -23,6 +23,8 @@ import android.util.Log;
 import com.bg7yoz.ft8cn.BuildConfig;
 import com.bg7yoz.ft8cn.GeneralVariables;
 import com.bg7yoz.ft8cn.R;
+import com.bg7yoz.ft8cn.database.ControlMode;
+import com.bg7yoz.ft8cn.rigs.InstructionSet;
 import com.bg7yoz.ft8cn.serialport.CdcAcmSerialDriver;
 import com.bg7yoz.ft8cn.serialport.UsbSerialDriver;
 import com.bg7yoz.ft8cn.serialport.UsbSerialPort;
@@ -88,6 +90,16 @@ public class CableSerialPort {
                 }
             }
         };
+    }
+
+    // FT-710 CAT cable mode: the rig stops producing RF when the host runs a
+    // serial read loop against its CAT port. We still need to send CAT writes
+    // (frequency, PTT), so we open the port but skip starting the read manager.
+    // Tracked in upstream FT8CN PR #168.
+    private boolean shouldUseFt710WriteOnlyCatMode() {
+        return GeneralVariables.instructionSet == InstructionSet.YAESU_FT710
+                && GeneralVariables.connectMode == ConnectMode.USB_CABLE
+                && GeneralVariables.controlMode == ControlMode.CAT;
     }
 
     private boolean prepare() {
@@ -202,7 +214,11 @@ public class CableSerialPort {
                     disconnect();
                 }
             });
-            usbIoManager.start();
+            if (!shouldUseFt710WriteOnlyCatMode()) {
+                usbIoManager.start();
+            } else {
+                Log.d(TAG, "FT-710 CAT write-only mode: skipping usbIoManager.start()");
+            }
             Log.d(TAG, "Serial port opened successfully!");
             connected = true;
 

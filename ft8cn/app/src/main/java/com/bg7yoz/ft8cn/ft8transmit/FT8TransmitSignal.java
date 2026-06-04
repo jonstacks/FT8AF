@@ -1381,9 +1381,26 @@ public class FT8TransmitSignal {
                 e.printStackTrace();
             }
 
-            // Compute how late we are into this 15-second cycle; leading audio will be clipped
-            // so transmission still ends on the cycle boundary.
-            int msLate = (int) (UtcTimer.getSystemTime() % 15000);
+            // Compute how late we are *vs. when FT8 audio should start*, and only
+            // clip leading audio if we'd overrun the 15-second cycle otherwise.
+            //
+            // FT8 = 79 GFSK symbols at 0.16s each = 12.64s of audio. The spec
+            // expects audio to start ~+0.5s into each 15s cycle, so any start
+            // between 0 and (15.00 - 12.64) = 2.36s into the cycle fits without
+            // clipping. The original `msLate = position % 15000` treated every
+            // millisecond past the cycle boundary as lateness — so a normal
+            // on-time TX that fires ~500-800ms into the cycle (totally fine)
+            // would chop 500-800ms off the *start* of the audio buffer, which
+            // is exactly where the leading Costas sync array lives (symbols
+            // 0-6, the first 1.12s). Receivers couldn't lock, and the signal
+            // came across as audible-but-undecodable.
+            //
+            // New behavior: skip only the excess past 2.36s. On-time and
+            // mildly-late TXs send the full waveform; only genuinely late
+            // starts (over ~2.4s into cycle) start clipping leading audio.
+            int msIntoCycle = (int) (UtcTimer.getSystemTime() % 15000);
+            int msMaxStart = 15000 - 12640; // 2360ms — last moment we can start without overrunning
+            int msLate = msIntoCycle - msMaxStart;
             if (msLate < 0) msLate = 0;
             if (msLate >= 15000) msLate = 14999;
             transmitSignal.lateStartSkipMs = msLate;

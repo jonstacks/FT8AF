@@ -25,8 +25,12 @@ public class Yaesu3RigConstant {
     //PTT state
 
     //command set
-    private static final String PTT_ON = "MX1;";
-    private static final String PTT_OFF = "MX0;";
+    // MX1/MX0 is the Monitor function on FT-891/991, not PTT — using it
+    // enabled the rig's speaker monitor but never keyed the transmitter,
+    // so audio was sent to the data jack and nobody on the band heard it.
+    // TX1/TX0 is the actual PTT command (rear/data PTT = TX1).
+    private static final String PTT_ON = "TX1;";
+    private static final String PTT_OFF = "TX0;";
     private static final String USB_MODE = "MD02;";
     private static final String USB_MODE_DATA = "MD09;";
     private static final String DATA_U_MODE = "MD0C;";

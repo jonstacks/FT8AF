@@ -231,6 +231,12 @@ public class ShareLogs {
                                 , cursor.getString(cursor.getColumnIndex("operator"))).getBytes());
                     }
                 }
+                // POTA fields. Only emit when populated so non-POTA QSOs stay
+                // byte-identical to the prior export format.
+                writePotaField(fileOutputStream, cursor, "my_sig", "MY_SIG");
+                writePotaField(fileOutputStream, cursor, "my_sig_info", "MY_SIG_INFO");
+                writePotaField(fileOutputStream, cursor, "sig", "SIG");
+                writePotaField(fileOutputStream, cursor, "sig_info", "SIG_INFO");
                 String comment = cursor.getString(cursor.getColumnIndex("comment"));
                 if (comment == null) comment = "";
 
@@ -395,5 +401,24 @@ public class ShareLogs {
             out.write(buf, 0, n);
         }
         out.flush();
+    }
+
+    /**
+     * Emit a single ADIF field from a cursor column. Silently skips when the
+     * column doesn't exist (pre-migration DB) or the value is null/empty so
+     * POTA fields stay invisible for ordinary non-POTA contacts.
+     */
+    private static void writePotaField(
+            FileOutputStream out, android.database.Cursor cursor,
+            String column, String adifName) throws IOException {
+        int idx = cursor.getColumnIndex(column);
+        if (idx < 0) return;
+        String value = cursor.getString(idx);
+        if (value == null || value.isEmpty()) return;
+        // ADIF length is in bytes; value.length() (UTF-16 code units) would mis-tag any
+        // non-ASCII content and misalign the following field.
+        byte[] valueBytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.write(String.format("<%s:%d>%s ", adifName, valueBytes.length, value)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }

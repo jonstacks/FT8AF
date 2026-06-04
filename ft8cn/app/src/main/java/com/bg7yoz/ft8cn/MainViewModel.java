@@ -947,6 +947,9 @@ public class MainViewModel extends ViewModel {
             case InstructionSet.YAESU_DX10:
                 baseRig = new YaesuDX10Rig();//YAESU DX10 DX101
                 break;
+            case InstructionSet.YAESU_FT710:
+                baseRig = new YaesuDX10Rig();//FT-710 reuses DX10 CAT; FT-710-specific fix is in CableSerialPort
+                break;
             case InstructionSet.KENWOOD_TS590:
                 baseRig = new KenwoodTS590Rig();//KENWOOD TS590
                 break;

@@ -24,18 +24,60 @@ phone's serial (from `adb devices`). adb itself lives at
 ## Debug logs
 
 The app writes a structured event log to
-`/sdcard/Android/data/com.bg7yoz.ft8cn/files/debug.log` via `fileLog()` in
+`/sdcard/Android/data/radio.ks3ckc.ft8af/files/debug.log` via `fileLog()` in
 `ComposeMainActivity.kt` — CAT serial sends/recvs, USB attach events,
 autoConnect attempts, band/frequency changes, etc. This is usually the most
 useful source. Pull it with:
 
 ```
-adb -s <phone-serial> pull /sdcard/Android/data/com.bg7yoz.ft8cn/files/debug.log /tmp/
+adb -s <phone-serial> pull /sdcard/Android/data/radio.ks3ckc.ft8af/files/debug.log /tmp/
 ```
 
 For runtime detail not in `debug.log` (audio recording loop, system USB events,
 crashes), use `adb logcat`. Useful tags: `FT8SignalListener`, `MicRecorder`,
 `UsbAudioDevice`, `CableConnector`, `CableSerialPort`, `UsbHostManager`,
-`UsbAlsaManager`. The app's `applicationId` is `com.bg7yoz.ft8cn` — pid-filter
-with `--pid=$(adb shell pidof com.bg7yoz.ft8cn)` when you only want app-internal
+`UsbAlsaManager`. The app's `applicationId` is `radio.ks3ckc.ft8af` — pid-filter
+with `--pid=$(adb shell pidof radio.ks3ckc.ft8af)` when you only want app-internal
 lines.
+
+## FT8 TX audio pipeline
+
+How a `playFT8Signal` call becomes RF, with the gotchas that produce
+audible-but-undecodable signals. Both of these were diagnosed the hard
+way and re-introducing either makes TX silently broken — the rig keys,
+audio is audible, ALC looks right, and zero spots appear on PSKReporter.
+
+**1. `libft8cn.so` generates the entire waveform.** `GenerateFT8.generateFt8(msg,
+freq, 12000)` returns a mono 12.64-second `float[]` at 12 kHz containing the full
+FT8 message. The Costas sync arrays at symbols 0-6, 36-42, 72-78 are
+embedded by `synth_gfsk` in the native lib (the .so is a closed-source JNI
+wrapper around kgoba `ft8_lib @ 6f528128`; see the user's memory entry
+`libft8cn-native-origin.md`). The buffer is correct as generated — everything
+downstream just has to *not break it*.
+
+**2. `lateStartSkipMs` clips leading audio, but only if we'd overrun the cycle.**
+FT8 audio is 12.64 s; cycle is 15 s; slack is 2.36 s. `msLate` (in
+`FT8TransmitSignal.java`) must be computed as
+`max(0, time_into_cycle_ms - 2360)` — **not** `time_into_cycle_ms %
+15000`. The latter treats every ms past the cycle boundary as lateness,
+so a normal on-time TX firing ~500-800 ms into the cycle chops that many
+ms off the **start** of the buffer — exactly where the leading Costas
+array lives. Receivers see audio but can't sync. Tell from log:
+`playLength < samples` when the TX started <2.4 s into the cycle. Fixed
+in PR #93.
+
+**3. `libusb_set_iso_packet_lengths` must use the audio rate, not
+`wMaxPacketSize`.** A USB Audio Class device plays back exactly the bytes
+per frame the host hands it. For USB FS, that's
+`(sampleRate * channels * bytesPerSample) / 1000` — e.g. 192 bytes/frame
+at 48 kHz stereo 16-bit. The endpoint's `wMaxPacketSize` (~200 for
+C-Media CM108-style chips) is the device's *max*, not the data rate.
+Sending that much per frame makes the device clock samples ~4 % faster
+than negotiated, shifting every FT8 tone up by the same ratio and
+pushing the message off WSJT-X's 6.25 Hz grid. Tell from log:
+`UsbAudioNative.nativeWrite` returns measurably faster than the audio
+duration (12.14 s real time for 12.64 s of audio). Fixed in PR #94 in
+`cpp/usb_audio_capture.cpp`. The Android-standard `AudioTrack` path is
+unaffected because the kernel UAC driver does this math automatically;
+the bug only bites the direct-libusb path used for car-dash kernels and
+similar.
