@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -30,8 +33,15 @@ import radio.ks3ckc.ft8us.theme.*
 @Composable
 fun TxStrip(
     isTransmitting: Boolean,
-    bandLabel: String,
-    frequencyMhz: String,
+    isActivated: Boolean,
+    frequencyLabel: String,
+    txSlot: Int,
+    expanded: Boolean = false,
+    onCallCQ: () -> Unit,
+    onStop: () -> Unit,
+    onToggleSlot: () -> Unit,
+    onOpenFrequencyPicker: () -> Unit,
+    onToggleExpand: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val bgColor = if (isTransmitting) {
@@ -62,11 +72,28 @@ fun TxStrip(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Left: status + band/mode
+        // Left: chevron + status
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // Expand/collapse chevron — only shown when QSO is active
+            if (isActivated) {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { onToggleExpand() }
+                        .rotate(if (expanded) 0f else 180f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FT8USIcons.ChevronDown(
+                        size = 14.dp,
+                        color = TextMuted,
+                        strokeWidth = 2f,
+                    )
+                }
+            }
             PulseDot(color = if (isTransmitting) Accent else Signal)
             Text(
                 text = if (isTransmitting) "TRANSMITTING" else "LISTENING",
@@ -76,34 +103,85 @@ fun TxStrip(
                 fontFamily = GeistMonoFamily,
                 letterSpacing = 0.02.sp,
             )
-            Text("·", color = TextFaint, fontSize = 11.sp)
-            Text(
-                text = "$bandLabel FT8",
-                color = TextMuted,
-                fontSize = 11.sp,
-                fontFamily = GeistMonoFamily,
-                letterSpacing = 0.02.sp,
-            )
         }
 
-        // Right: frequency
+        // Right: CQ/Stop button + frequency
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = frequencyMhz,
-                color = Accent,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = GeistMonoFamily,
-            )
-            Text(
-                text = "MHz",
-                color = TextFaint,
-                fontSize = 11.sp,
-                fontFamily = GeistMonoFamily,
-            )
+            // Frequency / band pill — opens the frequency picker
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BgSurface3)
+                    .clickable { onOpenFrequencyPicker() }
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = frequencyLabel,
+                    color = TextPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = GeistMonoFamily,
+                    letterSpacing = 0.02.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                FT8USIcons.ChevronDown(
+                    size = 12.dp,
+                    color = TextMuted,
+                    strokeWidth = 2f,
+                )
+            }
+
+            // CQ / Stop pill button
+            val buttonBg = if (isActivated) StatusBad.copy(alpha = 0.18f) else AccentSoft
+            val buttonTextColor = if (isActivated) StatusBad else Accent
+            val buttonLabel = if (isActivated) "STOP" else "CQ"
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(buttonBg)
+                    .clickable { if (isActivated) onStop() else onCallCQ() }
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = buttonLabel,
+                    color = buttonTextColor,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = GeistMonoFamily,
+                    letterSpacing = 0.04.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+
+            // TX slot toggle pill
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(BgSurface3)
+                    .clickable { onToggleSlot() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (txSlot == 0) "TX1" else "TX2",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = GeistMonoFamily,
+                    letterSpacing = 0.02.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }
@@ -130,7 +208,10 @@ private fun PulseDot(color: Color) {
         label = "pulseSize",
     )
 
-    Box(contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier.size(22.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         // Pulse ring
         Box(
             modifier = Modifier
@@ -147,6 +228,3 @@ private fun PulseDot(color: Color) {
         )
     }
 }
-
-// Re-export the font families for use in TxStrip
-private val GeistMonoFamily = radio.ks3ckc.ft8us.theme.GeistMonoFamily

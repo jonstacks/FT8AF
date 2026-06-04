@@ -29,6 +29,13 @@ val AccentGlow = Color(0xFFFFD7A0)
 val Signal = Color(0xFF5CD6E8)
 val SignalSoft = Color(0x245CD6E8)   // rgba(92,214,232, 0.14)
 
+// Target — the station the operator is currently calling. Pink/magenta so it's
+// visually distinct from CQ (amber) and TO YOU (cyan); these often stack on a
+// single row during an active QSO.
+val Target = Color(0xFFF472B6)
+val TargetSoft = Color(0x24F472B6)   // rgba(244,114,182, 0.14)
+val TargetBorder = Color(0x47F472B6) // rgba(244,114,182, 0.28)
+
 // Status
 val StatusNew = Color(0xFFC084FC)
 val StatusNeeded = Color(0xFFFFAF5E)
@@ -46,3 +53,7 @@ val Band10m = Color(0xFFC084FC)
 val Band30m = Color(0xFFF472B6)
 val Band17m = Color(0xFFFACC15)
 val Band12m = Color(0xFFFB7185)
+
+// PSK Reporter overlay (red-coral, intentionally absent from the rest of the palette so
+// auxiliary "stations hearing me" spots are visually distinct from decoded FT8 markers).
+val PskSpot = Color(0xFFF87171)

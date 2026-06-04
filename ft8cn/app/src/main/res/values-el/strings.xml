@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FT8CN</string>
+    <string name="app_name">FT8AF</string>
     <string name="nav_menu_title_call_list">Περιεχόμενο</string>
     <string name="nav_menu_title_decode_list">Αποκωδικοποίηση</string>
     <string name="nav_menu_title_my_calling">Κλήση</string>
@@ -35,7 +35,7 @@
     <string name="timeOffset">Χρονικό offset</string>
     <string name="help">Βοήθεια</string>
     <string name="scroll_down">▾</string>
-    <string name="about_me">Σχετικά με το FT8CN</string>
+    <string name="about_me">Σχετικά με το FT8AF</string>
 
     <string name="connectMode">\'Ελεγχος</string>
     <string name="VOX">VOX</string>
@@ -49,7 +49,7 @@
     <string name="close">Τερματισμός</string>
     <string name="rig_name">\'Ονομα ασύρματου</string>
     <string name="debug">Αποσφαλμάτωση</string>
-    <string name="logo_image">FT8CN</string>
+    <string name="logo_image">FT8AF</string>
     <string name="RTS">RTS</string>
     <string name="FAQ">FAQ</string>
     <string name="launch_supervision">TX watchdog</string>
@@ -82,7 +82,7 @@
     <string name="bluetooth_headset_mode">Επιλέξτε κατάσταση ακουστικών Bluetooth </string>>
     <string name="bluetooth_Headset_mode_cancelled">Εξοδος κατάστασης ακουστικών Bluetooth</string>>
 
-    <string name="version_info">FT8CN Εκδοση %s\nBG7YOZ\n%s</string>>
+    <string name="version_info">FT8AF Εκδοση %s\nBG7YOZ\n%s</string>>
 
 
     <string name="exit">Εξοδος</string>>

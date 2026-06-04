@@ -23,6 +23,8 @@ import android.util.Log;
 import com.bg7yoz.ft8cn.BuildConfig;
 import com.bg7yoz.ft8cn.GeneralVariables;
 import com.bg7yoz.ft8cn.R;
+import com.bg7yoz.ft8cn.database.ControlMode;
+import com.bg7yoz.ft8cn.rigs.InstructionSet;
 import com.bg7yoz.ft8cn.serialport.CdcAcmSerialDriver;
 import com.bg7yoz.ft8cn.serialport.UsbSerialDriver;
 import com.bg7yoz.ft8cn.serialport.UsbSerialPort;
@@ -88,6 +90,16 @@ public class CableSerialPort {
                 }
             }
         };
+    }
+
+    // FT-710 CAT cable mode: the rig stops producing RF when the host runs a
+    // serial read loop against its CAT port. We still need to send CAT writes
+    // (frequency, PTT), so we open the port but skip starting the read manager.
+    // Tracked in upstream FT8CN PR #168.
+    private boolean shouldUseFt710WriteOnlyCatMode() {
+        return GeneralVariables.instructionSet == InstructionSet.YAESU_FT710
+                && GeneralVariables.connectMode == ConnectMode.USB_CABLE
+                && GeneralVariables.controlMode == ControlMode.CAT;
     }
 
     private boolean prepare() {
@@ -202,7 +214,11 @@ public class CableSerialPort {
                     disconnect();
                 }
             });
-            usbIoManager.start();
+            if (!shouldUseFt710WriteOnlyCatMode()) {
+                usbIoManager.start();
+            } else {
+                Log.d(TAG, "FT-710 CAT write-only mode: skipping usbIoManager.start()");
+            }
             Log.d(TAG, "Serial port opened successfully!");
             connected = true;
 
@@ -223,18 +239,42 @@ public class CableSerialPort {
         return true;
     }
 
+    private void fileLog(String msg) {
+        try {
+            android.content.Context ctx = GeneralVariables.getMainContext();
+            if (ctx == null) return;
+            java.io.File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) return;
+            String ts = new java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                    .format(new java.util.Date());
+            new java.io.FileWriter(new java.io.File(dir, "debug.log"), true)
+                    .append(ts + " " + msg + "\n").close();
+        } catch (Exception ignored) {}
+        Log.d(TAG, msg);
+    }
+
     public boolean sendData(final byte[] src) {
         if (usbSerialPort != null) {
             try {
+                String preview = new String(src).replace("\r", "\\r").replace("\n", "\\n");
+                // Only log non-periodic commands (skip FA; reads to avoid log spam)
+                if (!preview.equals("FA;") && !preview.startsWith("RM")) {
+                    StringBuilder hex = new StringBuilder();
+                    for (byte b : src) hex.append(String.format("%02X ", b));
+                    fileLog("serial.send[" + src.length + "]: " + preview + " | hex: " + hex.toString().trim());
+                }
                 usbSerialPort.write(src, SEND_TIMEOUT);
+                if (!preview.equals("FA;") && !preview.startsWith("RM")) {
+                    fileLog("serial.send: write completed OK");
+                }
             } catch (IOException e) {
                 e.printStackTrace();
-                Log.e(TAG, "Error sending data: " + e.getMessage());
+                fileLog("serial.send ERROR: " + e.getMessage());
                 return false;
             }
             return true;
         } else {
-            Log.e(TAG, "Cannot send data, serial port is not open.");
+            fileLog("serial.send: port not open!");
             return false;
         }
 

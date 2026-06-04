@@ -16,14 +16,21 @@ static def getCurrentTime() {
 
 android {
 
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
-        applicationId "com.bg7yoz.ft8cn"
+        applicationId "radio.ks3ckc.ft8af"
         minSdk 23
-        targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        targetSdk 35
+        // CI builds derive versionCode from GITHUB_RUN_NUMBER + offset, so each
+        // run gets a unique, monotonically increasing value Play Console will
+        // accept. Offset clears the manual-upload history (current max in
+        // internal track is 4). Local builds without the env var keep the
+        // static fallback so debug/release builds run unchanged from a dev
+        // machine.
+        def ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode ciRunNumber ? (ciRunNumber.toInteger() + 100) : 4
+        versionName '1.0.2'
 
 
         dataBinding{
@@ -32,11 +39,35 @@ android {
 
         externalNativeBuild {
             cmake {
-                cppFlags '-JENABLE_XOM=false'//Disable XOM
-
+                // No extra cppFlags — the upstream FT8CN's '-JENABLE_XOM=false' was
+                // a typo (likely intended -D, not -J) that clang rejects when an
+                // actual native build is wired up. It had no effect before because
+                // the legacy libft8cn.so is shipped prebuilt via jniLibs.
+                cppFlags ''
             }
         }
-        signingConfig signingConfigs.debug
+
+        // The legacy libft8cn.so binaries in app/libs/<abi>/ stay packaged via
+        // jniLibs.srcDirs; this filter just keeps NDK builds focused on the
+        // four ABIs we ship and prevents an unexpected ABI slipping in.
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
+        }
+    }
+
+    signingConfigs {
+        // Release signing is opt-in via project properties (typically declared in
+        // ~/.gradle/gradle.properties or via -P flags on the command line). If those
+        // properties are absent the release build produces an unsigned APK rather than
+        // silently falling back to the debug key.
+        if (project.hasProperty('RELEASE_STORE_FILE')) {
+            release {
+                storeFile file(RELEASE_STORE_FILE)
+                storePassword RELEASE_STORE_PASSWORD
+                keyAlias RELEASE_KEY_ALIAS
+                keyPassword RELEASE_KEY_PASSWORD
+            }
+        }
     }
 
     buildTypes {
@@ -45,8 +76,13 @@ android {
             buildConfigField("String", "apkBuildTime", "\"${currentTime}\"")
         }
         release {
+            if (project.hasProperty('RELEASE_STORE_FILE')) {
+                signingConfig signingConfigs.release
+            }
+            // TODO: enable R8 once we have a proguard-rules.pro that keeps the JNI entry
+            // points in FT8SignalListener/FT8Package/etc and the reflection-driven
+            // SQLite mappers. Shipping with minify off until that work is done.
             minifyEnabled false
-            signingConfig signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             buildConfigField("String", "apkBuildTime", "\"${currentTime}\"")
 
@@ -67,18 +103,36 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.8'
     }
-//    externalNativeBuild {
-//        cmake {
-//            path file('src/main/cpp/CMakeLists.txt')
-//            version '3.18.1'
-//        }
-//    }
+    testOptions {
+        unitTests {
+            // Robolectric needs the merged manifest + resources to bring up an
+            // Android runtime; returnDefaultValues keeps unmocked framework
+            // calls (e.g. android.util.Log) from throwing in pure-JVM tests.
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
 
     sourceSets {
         main {
             java.srcDirs = ['src/main/java']
             kotlin.srcDirs = ['src/main/kotlin']
             jniLibs.srcDirs = ['libs']
+        }
+        test {
+            java.srcDirs = ['src/test/java']
+            kotlin.srcDirs = ['src/test/kotlin']
+            resources.srcDirs = ['src/test/resources']
+        }
+        androidTest {
+            java.srcDirs = ['src/androidTest/java']
+            kotlin.srcDirs = ['src/androidTest/kotlin']
         }
     }
     namespace 'com.bg7yoz.ft8cn'
@@ -118,8 +172,28 @@ dependencies {
     implementation 'androidx.compose.runtime:runtime-livedata'
     debugImplementation 'androidx.compose.ui:ui-tooling'
 
-    // Test dependencies
+    // Image loading for QRZ profile avatars
+    implementation 'io.coil-kt:coil-compose:2.6.0'
+
+    // --- JVM unit + Robolectric tests ---
     testImplementation 'junit:junit:4.13.2'
+    // 4.14.1 ships android-all for SDK 35; older versions fail with
+    // IllegalArgumentException during RobolectricTestRunner init.
     testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core:1.5.0'
+    testImplementation 'androidx.test.ext:junit:1.1.5'
     testImplementation 'com.google.truth:truth:1.4.2'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    testImplementation 'androidx.compose.ui:ui-test-junit4'
+
+    // ui-test-manifest must be debug-scoped: the merged debug manifest is what
+    // hosts ComponentActivity for createComposeRule(). testImplementation
+    // wouldn't surface it during the unit-test build.
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+
+    // --- Connected (instrumented) tests ---
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
 }

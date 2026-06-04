@@ -24,6 +24,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class GeneralVariables {
     private static final String TAG = "GeneralVariables";
     public static String VERSION = BuildConfig.VERSION_NAME;//Version number "0.62 (Beta 4)";
+    public static int VERSION_CODE = BuildConfig.VERSION_CODE;//Monotonic build number (CI: GITHUB_RUN_NUMBER + 100)
     public static String BUILD_DATE = BuildConfig.apkBuildTime;//Build time
     public static int MESSAGE_COUNT = 3000;//Maximum message cache count
     public static boolean saveSWLMessage = false;//Save decoded messages switch
@@ -55,12 +57,38 @@ public class GeneralVariables {
     public static int usbAudioOutputProductId = 0;
 
     public static MutableLiveData<Float> mutableVolumePercent = new MutableLiveData<>();
-    public static float volumePercent = 0.5f;//Audio playback volume, as a percentage
+    public static float volumePercent = 0.8f;//Audio playback volume, as a percentage
 
     public static int flexMaxRfPower = 10;//Flex radio max transmit power
     public static int flexMaxTunePower = 10;//Flex radio max tune power
 
+    // Hidden debug mode (unlocked by tapping the version 7 times in About).
+    // When true, Settings exposes the Debug screen for log viewing/sharing.
+    public static boolean debugModeEnabled = false;
+
     private Context mainContext;
+
+    /**
+     * Append a timestamped line to the app's external-files-dir debug.log.
+     * Safe to call from any thread; failures are swallowed so logging can never
+     * crash the caller. This is the structured app-event log surfaced by the
+     * in-app Debug screen and `adb pull` workflows.
+     */
+    public static void fileLog(String msg) {
+        try {
+            Context ctx = getMainContext();
+            if (ctx == null) return;
+            File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) return;
+            String ts = new java.text.SimpleDateFormat(
+                    "HH:mm:ss.SSS", java.util.Locale.US).format(new java.util.Date());
+            try (FileOutputStream fos = new FileOutputStream(new File(dir, "debug.log"), true)) {
+                fos.write((ts + " " + msg + "\n").getBytes());
+            }
+        } catch (Exception ignored) {
+        }
+        Log.d(TAG, msg);
+    }
     public static CallsignDatabase callsignDatabase = null;
 
     public void setMainContext(Context context) {
@@ -181,13 +209,21 @@ public class GeneralVariables {
     public static boolean alc_switch_on = true;//ALC alarm switch
 
     public static MutableLiveData<Float> mutableBaseFrequency = new MutableLiveData<>();
+
+    private static int spectrumWidth = 3500;//Spectrum display width in Hz
+    public static MutableLiveData<Integer> mutableSpectrumWidth = new MutableLiveData<>();
+
     public static String cloudlogServerAddress = "";//Cloudlog server address
     public static String cloudlogApiKey = "";//Cloudlog API key
     public static String cloudlogStationID = "";//Cloudlog station ID
     public static String qrzApiKey = ""; //QRZ API key
+    public static String qrzXmlUsername = ""; //QRZ XML API username (for callsign lookups)
+    public static String qrzXmlPassword = ""; //QRZ XML API password
+    public static boolean pskOverlayEnabled = false; //PSK Reporter map overlay (issue #33)
     public static boolean synFrequency = false;//Same-frequency transmit
     public static int transmitDelay = 500;//Transmit delay; also allows decoding time for the previous cycle
     public static int pttDelay = 100;//PTT response time; radios typically need some response time after PTT command, default 100ms
+    public static int lateStartTolerance = 2000;//Max ms into a cycle that a manual TX may start; leading audio is clipped so TX still ends on the cycle boundary. 0-4000.
     public static int civAddress = 0xa4;//CI-V address
     public static int baudRate = 19200;//Baud rate
     public static long band = 14074000;//Carrier frequency band
@@ -214,8 +250,10 @@ public class GeneralVariables {
 
     public static boolean autoFollowCQ = true;//Auto-follow CQ
     public static boolean autoCallFollow = true;//Auto-call followed callsigns
+    public static boolean autoUpdateGridFromGPS = false;//Use device GPS to keep Maidenhead grid current
     public static ArrayList<String> QSL_Callsign_list = new ArrayList<>();//Successfully QSL'd callsigns
     public static ArrayList<String> QSL_Callsign_list_other_band = new ArrayList<>();//Successfully QSL'd callsigns on other bands
+    public static HashSet<String> QSL_Grid_list = new HashSet<>();//Distinct worked 4-char Maidenhead grids (any band)
 
 
     public static final ArrayList<String> followCallsign = new ArrayList<>();//Followed callsigns
@@ -238,6 +276,15 @@ public class GeneralVariables {
     public static void setBaseFrequency(float baseFrequency) {
         mutableBaseFrequency.postValue(baseFrequency);
         GeneralVariables.baseFrequency = baseFrequency;
+    }
+
+    public static int getSpectrumWidth() {
+        return spectrumWidth;
+    }
+
+    public static void setSpectrumWidth(int width) {
+        mutableSpectrumWidth.postValue(width);
+        GeneralVariables.spectrumWidth = width;
     }
 
     public static String getCloudlogServerAddress() {
@@ -292,6 +339,15 @@ public class GeneralVariables {
      */
     public static boolean checkQSLCallsign_OtherBand(String callsign) {
         return QSL_Callsign_list_other_band.contains(callsign);
+    }
+
+    /**
+     * Check if a 4-character Maidenhead grid has been previously worked (any band).
+     * Caller should pass the first 4 characters upper-cased.
+     */
+    public static boolean checkQSLGrid(String grid) {
+        if (grid == null || grid.length() < 4) return false;
+        return QSL_Grid_list.contains(grid.substring(0, 4).toUpperCase());
     }
 
     /**

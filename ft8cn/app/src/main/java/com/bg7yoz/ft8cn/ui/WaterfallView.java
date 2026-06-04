@@ -19,6 +19,7 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.Shader;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.View;
 
@@ -29,6 +30,7 @@ import com.bg7yoz.ft8cn.Ft8Message;
 import com.bg7yoz.ft8cn.GeneralVariables;
 import com.bg7yoz.ft8cn.timer.UtcTimer;
 
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
@@ -36,11 +38,14 @@ import java.util.List;
 import java.util.ListIterator;
 
 public class WaterfallView extends View {
+    private static final String TAG = "WaterfallView";
+    private static final float FT8_SIGNAL_BANDWIDTH_HZ = 50f;
+
     private int blockHeight = 2;//Color block height
     private float freq_width = 1;//Frequency width
     private final int cycle = 2;
     private final int symbols = 93;
-    private int lastSequential = 0;
+    private int spectrumWidth = 3500;//Spectrum display width in Hz
     private Bitmap lastBitMap = null;
     private Canvas _canvas;
     private final Paint linePaint = new Paint();
@@ -58,6 +63,19 @@ public class WaterfallView extends View {
     private int touch_x = -1;
     private int freq_hz = -1;
     private boolean drawMessage = false;//Whether to draw message content
+
+    // Track the bitmap dimensions to avoid recreating on minor layout changes
+    private int bitmapWidth = 0;
+    private int bitmapHeight = 0;
+
+    // TX frequency marker overlay
+    private float txFrequency = -1f;
+    private boolean txActive = false;
+    private final Paint txMarkerPaint = new Paint();
+
+    // FT8 period timestamp tracking
+    private long lastTimestampPeriod = -1;
+    private final Paint timestampLinePaint = new Paint();
 
     public WaterfallView(Context context) {
         super(context);
@@ -86,9 +104,24 @@ public class WaterfallView extends View {
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        if (w <= 0 || h <= 0) return;
+
+        // Skip bitmap recreation if the size hasn't meaningfully changed.
+        // Compose layout can cause small oscillations in the view size;
+        // recreating the bitmap each time wipes all accumulated waterfall data.
+        if (lastBitMap != null && w == bitmapWidth && Math.abs(h - bitmapHeight) < 20) {
+            return;
+        }
+
+        Log.d(TAG, String.format("onSizeChanged: w=%d h=%d oldw=%d oldh=%d", w, h, oldw, oldh));
         setClickable(true);
-        blockHeight = getHeight() / (symbols * cycle);
-        freq_width = (float) getWidth() / 3000f;
+        bitmapWidth = w;
+        bitmapHeight = h;
+        blockHeight = h / (symbols * cycle);
+        if (blockHeight < 1) blockHeight = 1;
+        freq_width = (float) w / spectrumWidth;
+        Log.d(TAG, String.format("Bitmap created: %dx%d, blockHeight=%d, freq_width=%.2f, spectrumWidth=%d",
+                w, h, blockHeight, freq_width, spectrumWidth));
         lastBitMap = Bitmap.createBitmap(w, h, ARGB_8888);
         _canvas = new Canvas(lastBitMap);
         Paint blackPaint = new Paint();
@@ -127,16 +160,6 @@ public class WaterfallView extends View {
         messagePaint.setTextAlign(Paint.Align.CENTER);
         messagePaint.setShadowLayer(10,5,5,Color.BLACK);
 
-        //messagePaintBack = new Paint();
-//        messagePaintBack.setTextSize(dpToPixel(11));
-//        messagePaintBack.setColor(0xff000000);//Opaque background
-//        messagePaintBack.setAntiAlias(true);
-//        messagePaintBack.setDither(true);
-//        messagePaintBack.setStrokeWidth(dpToPixel(3));
-//        messagePaintBack.setFakeBoldText(true);
-//        messagePaintBack.setStyle(Paint.Style.FILL_AND_STROKE);
-//        messagePaintBack.setTextAlign(Paint.Align.CENTER);
-
         //utcPaint = new Paint();
         utcPaint.setTextSize(dpToPixel(10));
         utcPaint.setColor(0xff00ffff);//
@@ -163,6 +186,13 @@ public class WaterfallView extends View {
             pathEnd = 130 * getResources().getDisplayMetrics().density;
         }
 
+        txMarkerPaint.setStrokeWidth(1.5f * getResources().getDisplayMetrics().density);
+        txMarkerPaint.setStyle(Paint.Style.STROKE);
+
+        timestampLinePaint.setColor(0x6000ffff);
+        timestampLinePaint.setStrokeWidth(1);
+        timestampLinePaint.setStyle(Paint.Style.STROKE);
+
         super.onSizeChanged(w, h, oldw, oldh);
 
     }
@@ -171,13 +201,24 @@ public class WaterfallView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        if (lastBitMap == null) return;
         canvas.drawBitmap(lastBitMap, 0, 0, null);
+
+        // Draw TX frequency marker lines
+        if (txFrequency > 0 && freq_width > 0) {
+            txMarkerPaint.setColor(0xFFEF4444);
+            float halfBw = FT8_SIGNAL_BANDWIDTH_HZ / 2f;
+            float x1 = (txFrequency - halfBw) * freq_width;
+            float x2 = (txFrequency + halfBw) * freq_width;
+            canvas.drawLine(x1, 0, x1, getHeight(), txMarkerPaint);
+            canvas.drawLine(x2, 0, x2, getHeight(), txMarkerPaint);
+        }
 
         //Calculate frequency
         if (touch_x > 0) {//Draw touch line
-            freq_hz = Math.round(3000f * (float) touch_x / (float) getWidth());
-            if (freq_hz > 2900) {
-                freq_hz = 2900;
+            freq_hz = Math.round((float) spectrumWidth * (float) touch_x / (float) getWidth());
+            if (freq_hz > spectrumWidth - 100) {
+                freq_hz = spectrumWidth - 100;
             }
             if (freq_hz < 100) {
                 freq_hz = 100;
@@ -195,10 +236,14 @@ public class WaterfallView extends View {
             canvas.drawLine(touch_x, 0, touch_x, getHeight(), touchPaint);
 
         }
-        invalidate();
+        // Do NOT call invalidate() here. The view is invalidated externally
+        // when new data arrives via setWaveData(). Calling invalidate() from
+        // onDraw() creates a continuous redraw loop that triggers layout
+        // thrashing in Compose's AndroidView, causing onSizeChanged to fire
+        // repeatedly and wipe all accumulated waterfall data.
     }
 
-    public void setWaveData(int[] data, int sequential, List<Ft8Message> msgs) {
+    public void setWaveData(int[] data, List<Ft8Message> msgs) {
         if (drawMessage&& msgs!=null){//Copy messages to draw to prevent multi-thread access conflicts
             messages=new ArrayList<>(msgs);
         }else {
@@ -206,30 +251,24 @@ public class WaterfallView extends View {
         }
 
         if (data == null) {
+            Log.w(TAG, "setWaveData: data is null, skipping");
             return;
         }
         if (data.length <= 0) {
+            Log.w(TAG, "setWaveData: data is empty, skipping");
             return;
         }
         if (lastBitMap == null) {
+            Log.w(TAG, "setWaveData: bitmap not initialized, skipping");
             return;
         }
 
-        int[] colors = new int[data.length];
+        // Use bitmap dimensions for drawing, not getWidth()/getHeight() which
+        // may differ from the bitmap size during Compose layout transitions.
+        int drawWidth = bitmapWidth;
+        int drawHeight = bitmapHeight;
 
-        //Draw divider line
-        if (sequential != lastSequential) {
-            Bitmap bitmap = Bitmap.createBitmap(lastBitMap, 0, 0, getWidth(), getHeight() - blockHeight);
-            _canvas.drawBitmap(bitmap, 0, blockHeight, linePaint);
-            bitmap.recycle();
-            _canvas.drawRect(0, 0, getWidth(), getResources().getDisplayMetrics().density
-                    , linePaint);
-            _canvas.drawText(UtcTimer.getTimeStr(UtcTimer.getSystemTime()), 50
-                    , 15 * getResources().getDisplayMetrics().density, utcPainBack);
-            _canvas.drawText(UtcTimer.getTimeStr(UtcTimer.getSystemTime()), 50
-                    , 15 * getResources().getDisplayMetrics().density, utcPaint);
-        }
-        lastSequential = sequential;
+        int[] colors = new int[data.length];
 
         //Color block distribution
         for (int i = 0; i < data.length; i++) {
@@ -244,20 +283,46 @@ public class WaterfallView extends View {
                 colors[i] = 0xff00ffff | (((data[i] - 127)) << 18);//Amplify 4x
             }
         }
-        LinearGradient linearGradient = new LinearGradient(0, 0, getWidth() * 2, 0, colors
+        // Scale gradient so the visible portion (0..drawWidth) maps to 0..spectrumWidth Hz.
+        // The FFT data covers 0 to Nyquist (sampleRate/2). We want spectrumWidth Hz
+        // to fill the view, so the full gradient length = drawWidth * (Nyquist / spectrumWidth).
+        float nyquist = GeneralVariables.audioSampleRate / 2f;
+        float gradientScale = nyquist / spectrumWidth;
+        LinearGradient linearGradient = new LinearGradient(0, 0, drawWidth * gradientScale, 0, colors
                 , null, Shader.TileMode.CLAMP);
-        //Paint linearPaint = new Paint();
         linearPaint.setShader(linearGradient);
-        Bitmap bitmap = Bitmap.createBitmap(lastBitMap, 0, 0, getWidth(), getHeight() - blockHeight);
-        _canvas.drawBitmap(bitmap, 0, blockHeight, linearPaint);
+        Bitmap bitmap = Bitmap.createBitmap(lastBitMap, 0, 0, drawWidth, drawHeight - blockHeight);
+        _canvas.drawBitmap(bitmap, 0, blockHeight, null);
         bitmap.recycle();
-        _canvas.drawRect(0, 0, getWidth(), blockHeight, linearPaint);
+        _canvas.drawRect(0, 0, drawWidth, blockHeight, linearPaint);
+
+        // Draw FT8 period timestamp at 15-second boundaries
+        long utcMs = UtcTimer.getSystemTime();
+        long period = (utcMs / 1000) / 15;
+        if (period != lastTimestampPeriod) {
+            lastTimestampPeriod = period;
+            // Draw horizontal line at the boundary between new row and scrolled content
+            _canvas.drawLine(0, blockHeight, drawWidth, blockHeight, timestampLinePaint);
+            // Format UTC time label
+            long utcSec = utcMs / 1000;
+            long h = (utcSec / 3600) % 24;
+            long m = (utcSec % 3600) / 60;
+            long s = utcSec % 60;
+            @SuppressLint("DefaultLocale")
+            String timeLabel = String.format("%02d:%02d:%02d", h, m, s);
+            float textX = dpToPixel(2);
+            float textY = blockHeight + utcPaint.getTextSize() + dpToPixel(1);
+            // Draw outline then fill for readability over any spectrum color
+            _canvas.drawText(timeLabel, textX, textY, utcPainBack);
+            _canvas.drawText(timeLabel, textX, textY, utcPaint);
+            Log.d(TAG, String.format("Timestamp drawn: %s (period=%d, utcMs=%d, blockHeight=%d, textY=%.1f, drawWidth=%d)",
+                    timeLabel, period, utcMs, blockHeight, textY, drawWidth));
+        }
 
         //Messages have 3 types: normal, CQ, and involving me
         if (drawMessage && messages != null) {
+            Log.d(TAG, String.format("Drawing %d messages on waterfall", messages.size()));
             drawMessage = false;//Only draw once
-            //fontPaint.setTextAlign(Paint.Align.LEFT);
-            //fontPaint.setStrikeThruText(true);
             for (Ft8Message msg : messages) {
 
                 if (msg.inMyCall()) {//Related to me
@@ -305,5 +370,23 @@ public class WaterfallView extends View {
 
     public int getFreq_hz() {
         return freq_hz;
+    }
+
+    public void setTxFrequency(float freq) {
+        Log.d(TAG, String.format("setTxFrequency: %.1f Hz", freq));
+        this.txFrequency = freq;
+    }
+
+    public void setTxActive(boolean active) {
+        Log.d(TAG, String.format("setTxActive: %b", active));
+        this.txActive = active;
+    }
+
+    public void setSpectrumWidth(int width) {
+        Log.d(TAG, String.format("setSpectrumWidth: %d Hz (was %d)", width, spectrumWidth));
+        this.spectrumWidth = width;
+        if (bitmapWidth > 0) {
+            freq_width = (float) bitmapWidth / spectrumWidth;
+        }
     }
 }

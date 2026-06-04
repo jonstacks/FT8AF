@@ -1,8 +1,16 @@
 package radio.ks3ckc.ft8us.ui.map
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,20 +27,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +56,10 @@ import com.bg7yoz.ft8cn.Ft8Message
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import radio.ks3ckc.ft8us.pskreporter.PskReporterClient
 import radio.ks3ckc.ft8us.theme.*
 import radio.ks3ckc.ft8us.ui.components.GlassCard
 import radio.ks3ckc.ft8us.ui.components.TopBar
@@ -67,11 +87,54 @@ private data class StationMarker(
     val message: Ft8Message,
 )
 
+// PSK Reporter overlay (issue #33) — a receiver that has decoded the operator's signal.
+private data class PskSpotMarker(
+    val receiverCallsign: String,
+    val grid: String,
+    val lat: Double,
+    val lon: Double,
+    val snr: Int,
+    val frequencyHz: Long,
+)
+
+private const val PSK_OVERLAY_SECONDS_BACK = 3600
+private const val PSK_POLL_INTERVAL_MS = 5L * 60L * 1000L
+
 private data class ProjectedPoint(
     val x: Float,
     val y: Float,
     val distKm: Double,
 )
+
+private enum class MapViewMode { STANDARD, AZIMUTHAL }
+
+private const val MAP_MIN_ZOOM = 1f
+private const val MAP_MAX_ZOOM = 8f
+private const val MAP_ZOOM_STEP = 2f
+
+// ---------------------------------------------------------------------------
+// Great-circle distance (km) — used by both projections
+// ---------------------------------------------------------------------------
+
+private fun greatCircleKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val phi1 = Math.toRadians(lat1)
+    val phi2 = Math.toRadians(lat2)
+    val dLam = Math.toRadians(lon2 - lon1)
+    val cosC = sin(phi1) * sin(phi2) + cos(phi1) * cos(phi2) * cos(dLam)
+    return acos(cosC.coerceIn(-1.0, 1.0)) * 6371.0
+}
+
+// ---------------------------------------------------------------------------
+// Equirectangular (Plate Carrée) projection — lat/lon -> normalized [-1,1]
+// ---------------------------------------------------------------------------
+
+private fun equirectProject(lat: Double, lon: Double): ProjectedPoint {
+    return ProjectedPoint(
+        x = (lon / 180.0).toFloat(),
+        y = (-lat / 90.0).toFloat(),
+        distKm = 0.0,
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Azimuthal equidistant projection
@@ -103,64 +166,6 @@ private fun azProject(opLat: Double, opLon: Double, lat: Double, lon: Double): P
 }
 
 // ---------------------------------------------------------------------------
-// Land map data (5-degree grid, 36 rows x 72 cols)
-// ---------------------------------------------------------------------------
-
-private val LAND_MAP = arrayOf(
-    "000000000000000000000000000000000000000000000000000000000000000000000000",
-    "000000000000000000000000000111100000000000000000000000000000000000000000",
-    "000000000000111110000001111111111100000000011110000000000000000000000000",
-    "000000000011111111100011111111111111000000111111100000000000000000000000",
-    "000000000011111111111111111111111111100001111111110000000000000000000000",
-    "000000001111111111111111111111111111110011111111111100000000000000000000",
-    "000000001111111111111111111111111111111111111111111100000000000000000000",
-    "000000011111111111111111111111111111111111111111111110000000000000000000",
-    "000000011111111111111111111111111111111111111111111110000000000000000000",
-    "000000011111111111111111111111111111111111111111111111000000000000000000",
-    "000000011111111111111111111111111111111111111111111111100000001000000000",
-    "000000011111111111111111111111111111111111111111111111100000011100000000",
-    "000000001111111111111111111111111111111111111111111111110000011100000000",
-    "000000000011111111111111111111111111111111111111111111110001111000000000",
-    "000000000001111111111111111111111111111111111111111111100001110000000000",
-    "000000000000111111111111111111111111111111111111111111000001110000000000",
-    "000000000000011111100011111111110111111111011111111100000001110000000000",
-    "000000000000001111100001111111100011110010001111111000000001100000000000",
-    "000000000000000011100000111111000001100000000111110000000011000000000000",
-    "000000000000000001000000011110000001100000000011100000000111000000000000",
-    "000000000000000000000000001100000001100000000001000000001110000000000000",
-    "000000000000000000000000001100000001110000000000000000011100000000000000",
-    "000000000000000000000000000100000000110000000000000000111000000000000000",
-    "000000000000000000000000000000000000110000000000000001110000000000000000",
-    "000000000000000000000000000000000000010000000000000011100000000000000000",
-    "000000000000000000000000000000000000000000000000000111100000000000000000",
-    "000000000000000000000000000000000000000000000000001111000000000000000000",
-    "000000000000000000000000000000000000000000000000011110000000000000000000",
-    "000000000000000000000000000000000000000000000000111100000000000000000000",
-    "000000000000000000000000000000000000000000000001111100000000000000000000",
-    "000000000000000000000000000000000000000000000001111100000000000000000000",
-    "000000000000000000000000000000000000000000000011111000000000000000000000",
-    "000000000000000000000000000000000011111111111111111111111111111100000000",
-    "000000000000000000000000001111111111111111111111111111111111111111000000",
-    "000000000000000000001111111111111111111111111111111111111111111111110000",
-    "111111111111111111111111111111111111111111111111111111111111111111111111",
-)
-
-private val LAND_POINTS: List<Pair<Double, Double>> by lazy {
-    val points = mutableListOf<Pair<Double, Double>>()
-    for (row in LAND_MAP.indices) {
-        val lat = 90.0 - row * 5.0
-        val line = LAND_MAP[row]
-        for (col in line.indices) {
-            if (line[col] == '1') {
-                val lon = -180.0 + col * 5.0
-                points.add(Pair(lat, lon))
-            }
-        }
-    }
-    points
-}
-
-// ---------------------------------------------------------------------------
 // Map Screen
 // ---------------------------------------------------------------------------
 
@@ -172,6 +177,55 @@ fun MapScreen(mainViewModel: MainViewModel) {
     )
 
     var selectedCallsign by remember { mutableStateOf<String?>(null) }
+    var viewMode by rememberSaveable { mutableStateOf(MapViewMode.STANDARD) }
+    var pskOverlayEnabled by rememberSaveable { mutableStateOf(GeneralVariables.pskOverlayEnabled) }
+    var pskSpots by remember { mutableStateOf<List<PskSpotMarker>>(emptyList()) }
+
+    // Zoom + pan (issue #51). Scale is clamped to [1, MAX_ZOOM]; pan is clamped so the
+    // scaled map can't be dragged entirely off-screen. Both reset whenever the projection
+    // changes — pan offsets in screen pixels don't translate meaningfully between
+    // equirectangular and azimuthal.
+    var mapScale by rememberSaveable { mutableStateOf(1f) }
+    var mapPanX by rememberSaveable { mutableStateOf(0f) }
+    var mapPanY by rememberSaveable { mutableStateOf(0f) }
+    LaunchedEffect(viewMode) {
+        mapScale = 1f
+        mapPanX = 0f
+        mapPanY = 0f
+    }
+
+    // PSK Reporter polling — fires immediately on enter and every 5 min while enabled.
+    // Re-reads myCallsign each cycle so a mid-session change is picked up on the next tick.
+    // Structured concurrency cancels the loop when MapScreen leaves composition.
+    LaunchedEffect(pskOverlayEnabled) {
+        if (!pskOverlayEnabled) {
+            pskSpots = emptyList()
+            return@LaunchedEffect
+        }
+        while (true) {
+            val call = GeneralVariables.myCallsign.trim().uppercase()
+            if (call.isEmpty()) {
+                pskSpots = emptyList()
+            } else {
+                val spots = PskReporterClient.fetchSpotsForMe(call, PSK_OVERLAY_SECONDS_BACK)
+                if (spots != null) {
+                    pskSpots = spots.map {
+                        PskSpotMarker(
+                            receiverCallsign = it.receiverCallsign,
+                            grid = it.receiverGrid,
+                            lat = it.receiverLat,
+                            lon = it.receiverLon,
+                            snr = it.snr,
+                            frequencyHz = it.frequencyHz,
+                        )
+                    }
+                }
+                // On null (failure / cooldown / rate-limit) keep prior spots so the overlay
+                // doesn't flicker; PskReporterClient logs the reason to debug.log.
+            }
+            delay(PSK_POLL_INTERVAL_MS)
+        }
+    }
 
     // Derive operator lat/lon from grid
     val opLatLng = remember(myGrid) {
@@ -232,33 +286,150 @@ fun MapScreen(mainViewModel: MainViewModel) {
             .fillMaxSize()
             .background(BgApp),
     ) {
-        TopBar(title = "Map") {
-            Text(
-                text = if (myGrid.isNullOrEmpty()) "No grid set" else myGrid,
-                color = Signal,
-                fontFamily = GeistMonoFamily,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        }
+        TopBar(
+            title = "Map",
+            subtitle = {
+                Text(
+                    text = if (myGrid.isNullOrEmpty()) "No grid set" else myGrid,
+                    color = Signal,
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            },
+            actions = {
+                PskOverlayToggle(
+                    enabled = pskOverlayEnabled,
+                    onToggle = { newVal ->
+                        pskOverlayEnabled = newVal
+                        GeneralVariables.pskOverlayEnabled = newVal
+                        mainViewModel.databaseOpr.writeConfig(
+                            "pskOverlayEnabled",
+                            if (newVal) "1" else "0",
+                            null,
+                        )
+                    },
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                MapViewToggle(
+                    mode = viewMode,
+                    onModeChange = { viewMode = it },
+                )
+            },
+        )
 
-        // Map canvas
+        // Map canvas — pinch to zoom, drag to pan, double-tap to toggle 2× zoom in/out.
+        // The STD/AZ mode toggle moved to the TopBar pill since drag now means pan.
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 8.dp)
+                .pointerInput(viewMode) {
+                    detectTransformGestures { _, panDelta, zoom, _ ->
+                        val newScale = (mapScale * zoom).coerceIn(MAP_MIN_ZOOM, MAP_MAX_ZOOM)
+                        // Pan only meaningful when zoomed in; clamp so the scaled map can't
+                        // be dragged completely off the canvas.
+                        if (newScale > 1f) {
+                            val maxPanX = size.width.toFloat() * (newScale - 1f) / 2f
+                            val maxPanY = size.height.toFloat() * (newScale - 1f) / 2f
+                            mapPanX = (mapPanX + panDelta.x).coerceIn(-maxPanX, maxPanX)
+                            mapPanY = (mapPanY + panDelta.y).coerceIn(-maxPanY, maxPanY)
+                        } else {
+                            mapPanX = 0f
+                            mapPanY = 0f
+                        }
+                        mapScale = newScale
+                    }
+                }
+                .pointerInput(viewMode) {
+                    detectTapGestures(
+                        onDoubleTap = { tap ->
+                            // Double-tap toggles between 1× and ZOOM_STEP×, zooming around the
+                            // tap point so the tapped feature stays under the finger.
+                            val target = if (mapScale < MAP_ZOOM_STEP * 0.95f) MAP_ZOOM_STEP else 1f
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            if (target > 1f) {
+                                val factor = target / mapScale
+                                val newPanX = (1f - factor) * (tap.x - cx) + factor * mapPanX
+                                val newPanY = (1f - factor) * (tap.y - cy) + factor * mapPanY
+                                val maxPanX = size.width.toFloat() * (target - 1f) / 2f
+                                val maxPanY = size.height.toFloat() * (target - 1f) / 2f
+                                mapPanX = newPanX.coerceIn(-maxPanX, maxPanX)
+                                mapPanY = newPanY.coerceIn(-maxPanY, maxPanY)
+                            } else {
+                                mapPanX = 0f
+                                mapPanY = 0f
+                            }
+                            mapScale = target
+                        },
+                    )
+                },
             contentAlignment = Alignment.Center,
         ) {
-            AzimuthalMapCanvas(
-                opLat = opLat,
-                opLon = opLon,
-                stations = stations,
-                selectedCallsign = selectedCallsign,
-                onStationSelected = { selectedCallsign = it },
+            when (viewMode) {
+                MapViewMode.STANDARD -> StandardMapCanvas(
+                    opLat = opLat,
+                    opLon = opLon,
+                    stations = stations,
+                    pskSpots = pskSpots,
+                    selectedCallsign = selectedCallsign,
+                    onStationSelected = { selectedCallsign = it },
+                    scale = mapScale,
+                    panX = mapPanX,
+                    panY = mapPanY,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(2f),
+                )
+                MapViewMode.AZIMUTHAL -> AzimuthalMapCanvas(
+                    opLat = opLat,
+                    opLon = opLon,
+                    stations = stations,
+                    pskSpots = pskSpots,
+                    selectedCallsign = selectedCallsign,
+                    onStationSelected = { selectedCallsign = it },
+                    scale = mapScale,
+                    panX = mapPanX,
+                    panY = mapPanY,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f),
+                )
+            }
+
+            ZoomControls(
+                scale = mapScale,
+                onZoomIn = {
+                    val newScale = (mapScale * MAP_ZOOM_STEP).coerceAtMost(MAP_MAX_ZOOM)
+                    if (newScale != mapScale) {
+                        val factor = newScale / mapScale
+                        mapPanX *= factor
+                        mapPanY *= factor
+                        mapScale = newScale
+                    }
+                },
+                onZoomOut = {
+                    val newScale = (mapScale / MAP_ZOOM_STEP).coerceAtLeast(MAP_MIN_ZOOM)
+                    if (newScale <= 1f) {
+                        mapPanX = 0f
+                        mapPanY = 0f
+                    } else {
+                        val factor = newScale / mapScale
+                        mapPanX *= factor
+                        mapPanY *= factor
+                    }
+                    mapScale = newScale
+                },
+                onReset = {
+                    mapScale = 1f
+                    mapPanX = 0f
+                    mapPanY = 0f
+                },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp),
             )
         }
 
@@ -284,17 +455,142 @@ fun MapScreen(mainViewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "${stations.size} stations",
+                text = if (pskOverlayEnabled) {
+                    "${stations.size} stations · ${pskSpots.size} heard"
+                } else {
+                    "${stations.size} stations"
+                },
                 color = TextMuted,
                 fontSize = 10.5.sp,
             )
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = "Azimuthal Equidistant",
+                text = if (viewMode == MapViewMode.STANDARD) "Equirectangular" else "Azimuthal Equidistant",
                 color = TextDim,
                 fontSize = 9.sp,
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// View-mode toggle (segmented pill)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun MapViewToggle(
+    mode: MapViewMode,
+    onModeChange: (MapViewMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(BgSurface3),
+    ) {
+        TogglePill(
+            label = "STD",
+            active = mode == MapViewMode.STANDARD,
+            onClick = { onModeChange(MapViewMode.STANDARD) },
+        )
+        TogglePill(
+            label = "AZ",
+            active = mode == MapViewMode.AZIMUTHAL,
+            onClick = { onModeChange(MapViewMode.AZIMUTHAL) },
+        )
+    }
+}
+
+@Composable
+private fun PskOverlayToggle(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (enabled) PskSpot else BgSurface3)
+            .clickable { onToggle(!enabled) }
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "PSK",
+            color = if (enabled) BgApp else TextMuted,
+            fontFamily = GeistMonoFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun TogglePill(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) Accent else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (active) BgApp else TextMuted,
+            fontFamily = GeistMonoFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Zoom controls overlay
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ZoomControls(
+    scale: Float,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onReset: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val canZoomIn = scale < MAP_MAX_ZOOM - 0.001f
+    val canZoomOut = scale > MAP_MIN_ZOOM + 0.001f
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(BgSurface3.copy(alpha = 0.85f)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        ZoomButton(label = "+", enabled = canZoomIn, onClick = onZoomIn)
+        ZoomButton(label = "−", enabled = canZoomOut, onClick = onZoomOut)
+        ZoomButton(label = "1×", enabled = canZoomOut, onClick = onReset, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun ZoomButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    fontSize: androidx.compose.ui.unit.TextUnit = 14.sp,
+) {
+    Box(
+        modifier = Modifier
+            .width(32.dp)
+            .height(28.dp)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (enabled) TextPrimary else TextFaint,
+            fontFamily = GeistMonoFamily,
+            fontSize = fontSize,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -307,58 +603,143 @@ private fun AzimuthalMapCanvas(
     opLat: Double,
     opLon: Double,
     stations: List<StationMarker>,
+    pskSpots: List<PskSpotMarker>,
     selectedCallsign: String?,
     onStationSelected: (String?) -> Unit,
+    scale: Float,
+    panX: Float,
+    panY: Float,
     modifier: Modifier = Modifier,
 ) {
+    // Shared infinite transition drives every station's pulse phase via index offsets,
+    // so we avoid N independent animations.
+    val pulseTransition = rememberInfiniteTransition(label = "map-pulse")
+    val pulsePhase by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "map-pulse-phase",
+    )
+
+    val context = LocalContext.current
+    val landRings by produceState<List<FloatArray>?>(initialValue = null, context) {
+        value = withContext(Dispatchers.IO) { WorldOutlines.load(context) }
+    }
+
     Canvas(modifier = modifier) {
         val cx = size.width / 2f
         val cy = size.height / 2f
         val r = size.minDimension / 2f * 0.92f
+        // Operator's screen position after pan — used as the centre for range rings and
+        // compass bearings so they stay anchored to the operator marker when panned.
+        val opX = cx + panX
+        val opY = cy + panY
 
-        // Background circle
+        // Background circle (fixed — the disc itself doesn't move when panning).
         drawCircle(
             color = BgSurface,
             radius = r,
             center = Offset(cx, cy),
         )
 
-        // Land dots
-        drawLandDots(opLat, opLon, cx, cy, r)
+        // Land — Natural Earth 110m vector outlines projected via azProject
+        landRings?.let { rings -> drawAzimuthalLand(rings, opLat, opLon, cx, cy, r, scale, panX, panY) }
 
-        // Range rings
-        drawRangeRings(cx, cy, r)
+        // Range rings (scale with zoom, follow operator on pan)
+        drawRangeRings(opX, opY, r, scale)
 
-        // Compass bearings
+        // Compass bearings stay anchored to the disc — they're a fixed UI reference,
+        // not a map feature, so they don't pan or scale.
         drawCompassBearings(cx, cy, r)
 
         // Operator center marker
         drawCircle(
             color = Accent,
             radius = 4f,
-            center = Offset(cx, cy),
+            center = Offset(opX, opY),
         )
 
+        // PSK Reporter spots — drawn before stations so decoded markers layer on top.
+        // Square shape distinguishes them from circular station markers.
+        for (spot in pskSpots) {
+            val proj = azProject(opLat, opLon, spot.lat, spot.lon)
+            val sx = cx + proj.x * r * scale + panX
+            val sy = cy + proj.y * r * scale + panY
+            // Skip markers that fall outside the disc visually
+            val ddx = sx - cx
+            val ddy = sy - cy
+            if (sqrt(ddx * ddx + ddy * ddy) > r) continue
+
+            val half = 2.5f
+            drawRect(
+                color = PskSpot.copy(alpha = 0.7f),
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+            )
+            drawRect(
+                color = BgApp,
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+                style = Stroke(width = 0.8f),
+            )
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.argb(160, 248, 113, 113)
+                textSize = 14f
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.NORMAL,
+                )
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                spot.receiverCallsign,
+                sx + 5f,
+                sy + paint.textSize / 3f,
+                paint,
+            )
+        }
+
         // Station markers
-        for (station in stations) {
+        for ((index, station) in stations.withIndex()) {
             val proj = azProject(opLat, opLon, station.lat, station.lon)
-            val sx = cx + proj.x * r
-            val sy = cy + proj.y * r
+            val sx = cx + proj.x * r * scale + panX
+            val sy = cy + proj.y * r * scale + panY
 
             // Check if within map circle
-            val dx = sx - cx
-            val dy = sy - cy
-            if (sqrt(dx * dx + dy * dy) > r) continue
+            val ddx = sx - cx
+            val ddy = sy - cy
+            if (sqrt(ddx * ddx + ddy * ddy) > r) continue
 
             val isSelected = station.callsign == selectedCallsign
             val markerR = if (isSelected) 5f else 3.5f
             val glowR = if (isSelected) 12f else 8f
 
-            // Bearing line for selected station
+            // Pulse rings: 2 expanding rings per station, staggered by 0.5 phase. Phase derived from
+            // shared infinite transition with per-station offset (no per-marker InfiniteTransition).
+            val baseAmp = if (isSelected) 1f else 0.55f
+            val stationOffset = (index * 0.137f) % 1f
+            for (ringIndex in 0..1) {
+                val phase = ((pulsePhase + stationOffset + ringIndex * 0.5f) % 1f)
+                val ringR = glowR + (16f + (if (isSelected) 10f else 0f)) * phase
+                val ringAlpha = (1f - phase) * 0.35f * baseAmp
+                if (ringAlpha > 0f) {
+                    drawCircle(
+                        color = station.color.copy(alpha = ringAlpha),
+                        radius = ringR,
+                        center = Offset(sx, sy),
+                        style = Stroke(width = 1f),
+                    )
+                }
+            }
+
+            // Bearing line for selected station (originates at the operator's screen pos)
             if (isSelected) {
                 drawLine(
                     color = station.color.copy(alpha = 0.4f),
-                    start = Offset(cx, cy),
+                    start = Offset(opX, opY),
                     end = Offset(sx, sy),
                     strokeWidth = 1.5f,
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)),
@@ -411,42 +792,311 @@ private fun AzimuthalMapCanvas(
 }
 
 // ---------------------------------------------------------------------------
-// Drawing helpers
+// Standard (equirectangular) map canvas
 // ---------------------------------------------------------------------------
 
-private fun DrawScope.drawLandDots(
+@Composable
+private fun StandardMapCanvas(
+    opLat: Double,
+    opLon: Double,
+    stations: List<StationMarker>,
+    pskSpots: List<PskSpotMarker>,
+    selectedCallsign: String?,
+    onStationSelected: (String?) -> Unit,
+    scale: Float,
+    panX: Float,
+    panY: Float,
+    modifier: Modifier = Modifier,
+) {
+    val pulseTransition = rememberInfiniteTransition(label = "map-pulse-std")
+    val pulsePhase by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "map-pulse-phase-std",
+    )
+
+    val context = LocalContext.current
+    val landRings by produceState<List<FloatArray>?>(initialValue = null, context) {
+        value = withContext(Dispatchers.IO) { WorldOutlines.load(context) }
+    }
+
+    Canvas(modifier = modifier.clip(RoundedCornerShape(6.dp))) {
+        val w = size.width
+        val h = size.height
+        val halfW = w / 2f
+        val halfH = h / 2f
+
+        // Background panel
+        drawRect(color = BgSurface, size = size)
+
+        // Land — Natural Earth 110m vector outlines (drawn once polygons are loaded)
+        landRings?.let { rings -> drawWorldLand(rings, w, h, scale, panX, panY) }
+
+        // Lat/lon grid (over land so it stays visible across continents)
+        drawEquirectGrid(w, h, scale, panX, panY)
+
+        // Operator marker (at projected lat/lon, scaled + panned with map)
+        val opProj = equirectProject(opLat, opLon)
+        val opX = halfW + opProj.x * halfW * scale + panX
+        val opY = halfH + opProj.y * halfH * scale + panY
+        drawCircle(
+            color = Accent.copy(alpha = 0.25f),
+            radius = 8f,
+            center = Offset(opX, opY),
+        )
+        drawCircle(
+            color = Accent,
+            radius = 4f,
+            center = Offset(opX, opY),
+        )
+
+        // PSK Reporter spots — drawn before stations so decoded markers layer on top.
+        for (spot in pskSpots) {
+            val proj = equirectProject(spot.lat, spot.lon)
+            val sx = halfW + proj.x * halfW * scale + panX
+            val sy = halfH + proj.y * halfH * scale + panY
+
+            val half = 2.5f
+            drawRect(
+                color = PskSpot.copy(alpha = 0.7f),
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+            )
+            drawRect(
+                color = BgApp,
+                topLeft = Offset(sx - half, sy - half),
+                size = Size(half * 2, half * 2),
+                style = Stroke(width = 0.8f),
+            )
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.argb(160, 248, 113, 113)
+                textSize = 14f
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.NORMAL,
+                )
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                spot.receiverCallsign,
+                sx + 5f,
+                sy + paint.textSize / 3f,
+                paint,
+            )
+        }
+
+        // Station markers
+        for ((index, station) in stations.withIndex()) {
+            val proj = equirectProject(station.lat, station.lon)
+            val sx = halfW + proj.x * halfW * scale + panX
+            val sy = halfH + proj.y * halfH * scale + panY
+
+            val isSelected = station.callsign == selectedCallsign
+            val markerR = if (isSelected) 5f else 3.5f
+            val glowR = if (isSelected) 12f else 8f
+
+            // Pulse rings (same pattern as azimuthal: shared transition + per-station phase offset)
+            val baseAmp = if (isSelected) 1f else 0.55f
+            val stationOffset = (index * 0.137f) % 1f
+            for (ringIndex in 0..1) {
+                val phase = ((pulsePhase + stationOffset + ringIndex * 0.5f) % 1f)
+                val ringR = glowR + (16f + (if (isSelected) 10f else 0f)) * phase
+                val ringAlpha = (1f - phase) * 0.35f * baseAmp
+                if (ringAlpha > 0f) {
+                    drawCircle(
+                        color = station.color.copy(alpha = ringAlpha),
+                        radius = ringR,
+                        center = Offset(sx, sy),
+                        style = Stroke(width = 1f),
+                    )
+                }
+            }
+
+            // Bearing line for selected station (straight rhumb-style on flat map)
+            if (isSelected) {
+                drawLine(
+                    color = station.color.copy(alpha = 0.4f),
+                    start = Offset(opX, opY),
+                    end = Offset(sx, sy),
+                    strokeWidth = 1.5f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)),
+                )
+            }
+
+            // Glow
+            drawCircle(
+                color = station.color.copy(alpha = if (isSelected) 0.25f else 0.15f),
+                radius = glowR,
+                center = Offset(sx, sy),
+            )
+
+            // Marker dot
+            drawCircle(
+                color = station.color,
+                radius = markerR,
+                center = Offset(sx, sy),
+            )
+            drawCircle(
+                color = BgApp,
+                radius = markerR,
+                center = Offset(sx, sy),
+                style = Stroke(width = 1.2f),
+            )
+
+            // Callsign label
+            val textColor = if (isSelected) {
+                android.graphics.Color.WHITE
+            } else {
+                android.graphics.Color.argb(180, 138, 150, 177)
+            }
+            val paint = android.graphics.Paint().apply {
+                color = textColor
+                textSize = if (isSelected) 22f else 18f
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.NORMAL,
+                )
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                station.callsign,
+                sx + glowR + 4f,
+                sy + paint.textSize / 3f,
+                paint,
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawEquirectGrid(w: Float, h: Float, scale: Float, panX: Float, panY: Float) {
+    val gridColor = Color(0x1894A3B8)
+    val axisColor = Color(0x30FFAF5E) // equator + prime meridian — accent tint
+    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f))
+    val halfW = w / 2f
+    val halfH = h / 2f
+
+    // Meridians (vertical lines) every 30° lon, from -180 to 180
+    var lon = -180
+    while (lon <= 180) {
+        val isPrime = lon == 0
+        val x = halfW + (lon.toFloat() / 180f) * halfW * scale + panX
+        drawLine(
+            color = if (isPrime) axisColor else gridColor,
+            start = Offset(x, 0f),
+            end = Offset(x, h),
+            strokeWidth = if (isPrime) 1f else 0.5f,
+            pathEffect = dashEffect,
+        )
+        lon += 30
+    }
+
+    // Parallels (horizontal lines) every 30° lat, from -90 to 90
+    var lat = -90
+    while (lat <= 90) {
+        val isEquator = lat == 0
+        val y = halfH + (-lat.toFloat() / 90f) * halfH * scale + panY
+        drawLine(
+            color = if (isEquator) axisColor else gridColor,
+            start = Offset(0f, y),
+            end = Offset(w, y),
+            strokeWidth = if (isEquator) 1f else 0.5f,
+            pathEffect = dashEffect,
+        )
+        lat += 30
+    }
+}
+
+private fun DrawScope.drawWorldLand(
+    rings: List<FloatArray>,
+    w: Float,
+    h: Float,
+    scale: Float,
+    panX: Float,
+    panY: Float,
+) {
+    // rings are flat float arrays of [lon, lat, lon, lat, ...] in geographic degrees.
+    // Project via equirectangular and apply scale + pan around the canvas centre.
+    val halfW = w / 2f
+    val halfH = h / 2f
+    fun px(lon: Float) = halfW + (lon / 180f) * halfW * scale + panX
+    fun py(lat: Float) = halfH + (-lat / 90f) * halfH * scale + panY
+
+    val path = Path()
+    for (ring in rings) {
+        if (ring.size < 6) continue // need at least 3 points for a polygon
+        path.moveTo(px(ring[0]), py(ring[1]))
+        var i = 2
+        while (i < ring.size) {
+            path.lineTo(px(ring[i]), py(ring[i + 1]))
+            i += 2
+        }
+        path.close()
+    }
+    drawPath(path, color = Color(0x4094A3B8))                                  // fill
+    drawPath(path, color = Color(0x9094A3B8), style = Stroke(width = 0.75f))   // outline
+}
+
+// ---------------------------------------------------------------------------
+// Azimuthal land renderer + drawing helpers
+// ---------------------------------------------------------------------------
+
+private fun DrawScope.drawAzimuthalLand(
+    rings: List<FloatArray>,
     opLat: Double,
     opLon: Double,
     cx: Float,
     cy: Float,
     r: Float,
+    scale: Float,
+    panX: Float,
+    panY: Float,
 ) {
-    val landColor = Color(0x1A94A3B8) // subtle gray
-    for ((lat, lon) in LAND_POINTS) {
-        val proj = azProject(opLat, opLon, lat, lon)
-        val px = cx + proj.x * r
-        val py = cy + proj.y * r
-
-        val dx = px - cx
-        val dy = py - cy
-        if (sqrt(dx * dx + dy * dy) > r) continue
-
-        drawCircle(
-            color = landColor,
-            radius = 2.5f,
-            center = Offset(px, py),
-        )
+    val land = Path()
+    for (ring in rings) {
+        if (ring.size < 6) continue
+        var first = true
+        var i = 0
+        while (i < ring.size) {
+            val lon = ring[i].toDouble()
+            val lat = ring[i + 1].toDouble()
+            val proj = azProject(opLat, opLon, lat, lon)
+            val px = cx + proj.x * r * scale + panX
+            val py = cy + proj.y * r * scale + panY
+            if (first) {
+                land.moveTo(px, py)
+                first = false
+            } else {
+                land.lineTo(px, py)
+            }
+            i += 2
+        }
+        land.close()
+    }
+    // Clip to the disc so anything that strays past the horizon (or wraps
+    // weirdly near the antipode) is hidden.
+    val disc = Path().apply {
+        addOval(androidx.compose.ui.geometry.Rect(
+            left = cx - r, top = cy - r, right = cx + r, bottom = cy + r,
+        ))
+    }
+    clipPath(disc) {
+        drawPath(land, color = Color(0x4094A3B8))
+        drawPath(land, color = Color(0x9094A3B8), style = Stroke(width = 0.75f))
     }
 }
 
-private fun DrawScope.drawRangeRings(cx: Float, cy: Float, r: Float) {
+private fun DrawScope.drawRangeRings(cx: Float, cy: Float, r: Float, scale: Float = 1f) {
     val maxKm = 20015.0
     val rings = listOf(2500, 5000, 10000, 15000, 20000)
     val ringColor = Color(0x1894A3B8)
     val dashEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f))
 
     for (km in rings) {
-        val ringR = (km.toFloat() / maxKm.toFloat()) * r * (PI.toFloat() / 2f)
+        val ringR = (km.toFloat() / maxKm.toFloat()) * r * (PI.toFloat() / 2f) * scale
         drawCircle(
             color = ringColor,
             radius = ringR,
@@ -526,7 +1176,7 @@ private fun SelectedStationCard(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val proj = azProject(opLat, opLon, station.lat, station.lon)
+    val distKm = greatCircleKm(opLat, opLon, station.lat, station.lon)
     val bearing = computeBearing(opLat, opLon, station.lat, station.lon)
 
     GlassCard(modifier = modifier.clickable { onDismiss() }) {
@@ -556,7 +1206,7 @@ private fun SelectedStationCard(
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                InfoChip("${String.format("%.0f", proj.distKm)} km", "Distance")
+                InfoChip("${String.format("%.0f", distKm)} km", "Distance")
                 InfoChip("${String.format("%.0f", bearing)}\u00B0", "Bearing")
                 InfoChip("${station.snr} dB", "SNR")
             }

@@ -1,6 +1,7 @@
 package radio.ks3ckc.ft8us.ui.logbook
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -24,17 +25,41 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import radio.ks3ckc.ft8us.ui.motion.MotionTokens
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.launch
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -47,19 +72,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.count.CountDbOpr
 import com.bg7yoz.ft8cn.log.QSLCallsignRecord
+import com.bg7yoz.ft8cn.log.ThirdPartyService
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import radio.ks3ckc.ft8us.theme.*
+import radio.ks3ckc.ft8us.ui.components.AnimatedCounter
+import radio.ks3ckc.ft8us.ui.components.EmptyStateWaves
 import radio.ks3ckc.ft8us.ui.components.GlassCard
 import radio.ks3ckc.ft8us.ui.components.QsoStatus
+import radio.ks3ckc.ft8us.ui.components.ShimmerBox
 import radio.ks3ckc.ft8us.ui.components.StatusPill
 import radio.ks3ckc.ft8us.ui.components.TopBar
 import radio.ks3ckc.ft8us.ui.components.TopBarSubtitle
+import radio.ks3ckc.ft8us.ui.decode.UsStateLookup
 import kotlin.coroutines.resume
 
 // ---------------------------------------------------------------------------
@@ -116,24 +147,55 @@ private data class AwardProgress(
 @Composable
 fun LogbookScreen(mainViewModel: MainViewModel) {
     var activeTab by remember { mutableStateOf(LogbookTab.STATS) }
+    var exportSheetVisible by remember { mutableStateOf(false) }
 
-    // Async-loaded stats
+    // Async-loaded state
     var stats by remember { mutableStateOf(LogbookStats()) }
+    var records by remember { mutableStateOf<List<QSLCallsignRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    // Load stats from database
-    LaunchedEffect(Unit) {
+    // Bumped after an edit or delete to re-run the loader.
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    // Per-row action state for the Recent tab
+    var editingRecord by remember { mutableStateOf<QSLCallsignRecord?>(null) }
+    var deletingRecord by remember { mutableStateOf<QSLCallsignRecord?>(null) }
+
+    // Catch-up sync UI state
+    var syncDialogState by remember { mutableStateOf<SyncDialogState?>(null) }
+
+    val scope = rememberCoroutineScope()
+
+    // Load records and stats from the database. Re-runs when refreshKey changes
+    // (e.g. after the user edits or deletes a QSO).
+    LaunchedEffect(refreshKey) {
         withContext(Dispatchers.IO) {
             try {
-                val db = mainViewModel.databaseOpr?.db ?: run {
+                val opr = mainViewModel.databaseOpr
+                val db = opr?.db
+                if (opr == null || db == null) {
                     isLoading = false
                     return@withContext
                 }
 
-                // Total QSOs
+                // QSO records — pull all rows, no filter
+                val loaded = suspendCancellableCoroutine<List<QSLCallsignRecord>> { cont ->
+                    opr.getQSLCallsignsByCallsign(true, 0, "", 0) { result ->
+                        cont.resume(result?.toList() ?: emptyList())
+                    }
+                }
+                records = loaded
+                // Mirror into the legacy ViewModel field so other (Java) screens stay in sync.
+                mainViewModel.callsignRecords?.let {
+                    it.clear()
+                    it.addAll(loaded)
+                }
+
+                // Total QSOs (single-fire callback)
                 val totalInfo = suspendCancellableCoroutine { cont ->
+                    val resumed = AtomicBoolean(false)
                     CountDbOpr.getQSLTotal(db) { info ->
-                        cont.resume(info)
+                        if (resumed.compareAndSet(false, true)) cont.resume(info)
                     }
                 }
                 val totalQsos = totalInfo?.values?.sumOf { it.value } ?: 0
@@ -165,10 +227,11 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
                 }
                 val ituCount = ituInfo?.values?.size ?: 0
 
-                // Band counts
+                // Band counts (single-fire callback)
                 val bandInfo = suspendCancellableCoroutine { cont ->
+                    val resumed = AtomicBoolean(false)
                     CountDbOpr.getBandCount(db) { info ->
-                        cont.resume(info)
+                        if (resumed.compareAndSet(false, true)) cont.resume(info)
                     }
                 }
                 val bandCounts = bandInfo?.values?.map { (it.name ?: "") to it.value }
@@ -182,47 +245,260 @@ fun LogbookScreen(mainViewModel: MainViewModel) {
                     bandCounts = bandCounts,
                 )
             } catch (_: Exception) {
-                // Keep placeholder stats on error
+                // Leave records/stats at defaults on error
             }
             isLoading = false
         }
     }
 
-    // QSO records from ViewModel
-    val records: List<QSLCallsignRecord> = remember(mainViewModel.callsignRecords) {
-        mainViewModel.callsignRecords?.toList() ?: emptyList()
-    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(BgApp),
+        ) {
+            // Top bar
+            TopBar(
+                title = "Logbook",
+                subtitle = {
+                    val count = if (stats.totalQsos > 0) stats.totalQsos else records.size
+                    TopBarSubtitle(text = "$count QSOs \u00b7 All bands")
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            if (syncDialogState?.inProgress == true) return@IconButton
+                            val cl = GeneralVariables.enableCloudlog
+                            val qrz = GeneralVariables.enableQRZ
+                            if (!cl && !qrz) {
+                                syncDialogState = SyncDialogState(
+                                    inProgress = false,
+                                    done = 0,
+                                    total = 0,
+                                    cloudlogOk = 0,
+                                    qrzOk = 0,
+                                    cloudlogAttempted = false,
+                                    qrzAttempted = false,
+                                    finished = true,
+                                    noServicesEnabled = true,
+                                )
+                                return@IconButton
+                            }
+                            syncDialogState = SyncDialogState(
+                                inProgress = true,
+                                done = 0,
+                                total = 0,
+                                cloudlogOk = 0,
+                                qrzOk = 0,
+                                cloudlogAttempted = cl,
+                                qrzAttempted = qrz,
+                                finished = false,
+                                noServicesEnabled = false,
+                            )
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    val db = mainViewModel.databaseOpr?.db
+                                        ?: return@withContext null
+                                    ThirdPartyService.syncAllQSOs(db) { done, total, ok1, ok2 ->
+                                        // Marshal back to main thread for state update
+                                        syncDialogState = syncDialogState?.copy(
+                                            done = done,
+                                            total = total,
+                                            cloudlogOk = ok1,
+                                            qrzOk = ok2,
+                                        )
+                                    }
+                                }
+                                syncDialogState = syncDialogState?.copy(
+                                    inProgress = false,
+                                    finished = true,
+                                    total = result?.total ?: 0,
+                                    cloudlogOk = result?.cloudlogOk ?: 0,
+                                    qrzOk = result?.qrzOk ?: 0,
+                                )
+                                // Re-query QSLTable so the row chips pick up the
+                                // newly-set synced_cloudlog / synced_qrz flags.
+                                refreshKey++
+                            }
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.CloudUpload,
+                            contentDescription = "Sync to logging services",
+                            tint = TextMuted,
+                        )
+                    }
+                    IconButton(onClick = { exportSheetVisible = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "Export QSOs",
+                            tint = TextMuted,
+                        )
+                    }
+                },
+            )
 
+            // Segmented tab switcher
+            SegmentedTabRow(
+                tabs = LogbookTab.entries,
+                selected = activeTab,
+                onSelected = { activeTab = it },
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Tab content
+            when (activeTab) {
+                LogbookTab.STATS -> if (isLoading) StatsLoadingPlaceholder() else StatsTab(stats, records)
+                LogbookTab.RECENT -> RecentTab(
+                    records = records,
+                    onEdit = { editingRecord = it },
+                    onDelete = { deletingRecord = it },
+                )
+                LogbookTab.AWARDS -> AwardsTab(stats)
+            }
+        }
+
+        // Export bottom sheet (overlays on top)
+        ExportLogSheet(
+            visible = exportSheetVisible,
+            mainViewModel = mainViewModel,
+            onDismiss = { exportSheetVisible = false },
+        )
+
+        // Per-row edit dialog
+        editingRecord?.let { rec ->
+            EditQsoDialog(
+                record = rec,
+                onDismiss = { editingRecord = null },
+                onSave = { newCall, newGrid, newMode ->
+                    editingRecord = null
+                    if (rec.id > 0) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                val db = mainViewModel.databaseOpr?.db ?: return@withContext
+                                val values = android.content.ContentValues().apply {
+                                    put("call", newCall.trim().uppercase())
+                                    put("gridsquare", newGrid.trim())
+                                    put("mode", newMode.trim())
+                                }
+                                db.update("QSLTable", values, "id=?",
+                                    arrayOf(rec.id.toString()))
+                            }
+                            refreshKey++
+                        }
+                    }
+                },
+            )
+        }
+
+        // Per-row delete confirmation
+        deletingRecord?.let { rec ->
+            DeleteQsoConfirm(
+                record = rec,
+                onCancel = { deletingRecord = null },
+                onConfirm = {
+                    deletingRecord = null
+                    if (rec.id > 0) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                val db = mainViewModel.databaseOpr?.db ?: return@withContext
+                                db.execSQL("delete from QSLTable where id=?",
+                                    arrayOf<Any>(rec.id))
+                            }
+                            refreshKey++
+                        }
+                    }
+                },
+            )
+        }
+
+        // Catch-up sync progress / result dialog
+        syncDialogState?.let { state ->
+            CatchUpSyncDialog(
+                state = state,
+                onDismiss = {
+                    if (!state.inProgress) syncDialogState = null
+                },
+            )
+        }
+    }
+}
+
+private data class SyncDialogState(
+    val inProgress: Boolean,
+    val done: Int,
+    val total: Int,
+    val cloudlogOk: Int,
+    val qrzOk: Int,
+    val cloudlogAttempted: Boolean,
+    val qrzAttempted: Boolean,
+    val finished: Boolean,
+    val noServicesEnabled: Boolean,
+)
+
+@Composable
+private fun StatsLoadingPlaceholder() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgApp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Top bar
-        TopBar(
-            title = "Logbook",
-            subtitle = {
-                val count = if (stats.totalQsos > 0) stats.totalQsos else records.size
-                TopBarSubtitle(text = "$count QSOs \u00b7 All bands")
-            },
-        )
-
-        // Segmented tab switcher
-        SegmentedTabRow(
-            tabs = LogbookTab.entries,
-            selected = activeTab,
-            onSelected = { activeTab = it },
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Tab content
-        when (activeTab) {
-            LogbookTab.STATS -> StatsTab(stats, records)
-            LogbookTab.RECENT -> RecentTab(records)
-            LogbookTab.AWARDS -> AwardsTab(stats)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+            ShimmerBox(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(96.dp),
+                cornerRadius = 16.dp,
+            )
+        }
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp),
+            cornerRadius = 16.dp,
+        )
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp),
+            cornerRadius = 12.dp,
+        )
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(140.dp),
+            cornerRadius = 16.dp,
+        )
     }
 }
 
@@ -289,6 +565,24 @@ private fun SegmentedTabRow(
 
 @Composable
 private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
+    // Animate charts in from 0 once on first render of this tab in this process lifecycle.
+    var hasAnimated by rememberSaveable { mutableStateOf(false) }
+    var animTarget by remember { mutableStateOf(if (hasAnimated) 1f else 0f) }
+    val chartProgress by animateFloatAsState(
+        targetValue = animTarget,
+        animationSpec = tween(
+            durationMillis = MotionTokens.DurXSlow,
+            easing = MotionTokens.EasingEmphasizedDecel,
+        ),
+        label = "stats-tab-chart-progress",
+    )
+    LaunchedEffect(Unit) {
+        if (!hasAnimated) {
+            animTarget = 1f
+            hasAnimated = true
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -303,13 +597,13 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
         ) {
             BigStatCard(
                 label = "Total QSOs",
-                value = stats.totalQsos.toString(),
+                value = stats.totalQsos,
                 accentColor = Accent,
                 modifier = Modifier.weight(1f),
             )
             BigStatCard(
                 label = "DXCC Entities",
-                value = stats.dxccEntities.toString(),
+                value = stats.dxccEntities,
                 accentColor = Signal,
                 modifier = Modifier.weight(1f),
             )
@@ -321,13 +615,13 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
         ) {
             BigStatCard(
                 label = "CQ Zones",
-                value = stats.cqZones.toString(),
+                value = stats.cqZones,
                 accentColor = StatusNew,
                 modifier = Modifier.weight(1f),
             )
             BigStatCard(
                 label = "ITU Zones",
-                value = stats.ituZones.toString(),
+                value = stats.ituZones,
                 accentColor = Band17m,
                 modifier = Modifier.weight(1f),
             )
@@ -338,6 +632,7 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
             SectionHeader("Band Distribution")
             BandDonutChart(
                 bandCounts = stats.bandCounts,
+                progress = chartProgress,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -349,24 +644,28 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
             current = stats.dxccEntities,
             total = 340,
             gradientColors = listOf(Signal, StatusConfirmed),
+            progress = chartProgress,
         )
         AwardProgressBar(
             label = "VUCC Grid Squares",
             current = gridSquaresWorked(records),
             total = 100,
             gradientColors = listOf(StatusNew, Band12m),
+            progress = chartProgress,
         )
         AwardProgressBar(
             label = "DXCC Challenge",
             current = stats.dxccEntities * stats.bandCounts.size.coerceAtLeast(1),
             total = 1000,
             gradientColors = listOf(Accent, Band17m),
+            progress = chartProgress,
         )
 
         // Grid square heatmap
         SectionHeader("Grid Coverage")
         GridSquareHeatmap(
             records = records,
+            progress = chartProgress,
             modifier = Modifier.fillMaxWidth(),
         )
 
@@ -374,6 +673,7 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
         SectionHeader("Signal Trend")
         SignalSparkline(
             records = records,
+            progress = chartProgress,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(72.dp),
@@ -390,17 +690,18 @@ private fun StatsTab(stats: LogbookStats, records: List<QSLCallsignRecord>) {
 @Composable
 private fun BigStatCard(
     label: String,
-    value: String,
+    value: Int,
     accentColor: Color,
     modifier: Modifier = Modifier,
 ) {
     GlassCard(modifier = modifier) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                text = value,
-                style = MaterialTheme.typography.displayMedium,
-                color = accentColor,
-                fontFamily = GeistMonoFamily,
+            AnimatedCounter(
+                value = value,
+                style = MaterialTheme.typography.displayMedium.copy(
+                    color = accentColor,
+                    fontFamily = GeistMonoFamily,
+                ),
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -438,6 +739,7 @@ private fun SectionHeader(text: String) {
 private fun BandDonutChart(
     bandCounts: List<Pair<String, Int>>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
     val total = bandCounts.sumOf { it.second }.coerceAtLeast(1)
     val arcGap = 3f
@@ -463,7 +765,7 @@ private fun BandDonutChart(
 
                 var startAngle = -90f
                 for ((band, count) in bandCounts) {
-                    val sweep = (count.toFloat() / total) * 360f - arcGap
+                    val sweep = ((count.toFloat() / total) * 360f - arcGap) * progress
                     if (sweep > 0f) {
                         drawArc(
                             color = bandColor(band),
@@ -525,8 +827,9 @@ private fun AwardProgressBar(
     total: Int,
     gradientColors: List<Color>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
-    val fraction = (current.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val fraction = ((current.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f)) * progress.coerceIn(0f, 1f)
     val trackShape = RoundedCornerShape(4.dp)
 
     GlassCard(modifier = modifier.fillMaxWidth()) {
@@ -583,6 +886,7 @@ private fun AwardProgressBar(
 private fun GridSquareHeatmap(
     records: List<QSLCallsignRecord>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
     // Build set of worked 2-char field designators (e.g., "FN", "JO")
     val workedFields = remember(records) {
@@ -614,7 +918,7 @@ private fun GridSquareHeatmap(
                         val isWorked = field in workedFields
 
                         val cellColor = when {
-                            isWorked -> Signal.copy(alpha = 0.7f)
+                            isWorked -> Signal.copy(alpha = 0.7f * progress.coerceIn(0f, 1f))
                             else -> BgSurface3.copy(alpha = 0.4f)
                         }
 
@@ -640,21 +944,32 @@ private fun GridSquareHeatmap(
 private fun SignalSparkline(
     records: List<QSLCallsignRecord>,
     modifier: Modifier = Modifier,
+    progress: Float = 1f,
 ) {
-    // Extract SNR-like values from recent records; placeholder if records lack SNR field
-    val dataPoints = remember(records) {
-        if (records.isEmpty()) {
-            // Placeholder data when no records available
-            listOf(-12f, -8f, -15f, -6f, -10f, -4f, -14f, -7f, -11f, -3f,
-                   -9f, -13f, -5f, -8f, -2f, -10f, -6f, -12f, -4f, -7f)
-        } else {
-            // Use last 30 records, derive a pseudo-SNR from band mapping
-            records.takeLast(30).mapIndexed { index, _ ->
-                // Without a direct SNR field on QSLCallsignRecord, generate
-                // a representative value from the record index for visualization
-                val base = -15f + (index % 20) * 1.2f
-                base.coerceIn(-25f, 5f)
+    if (records.isEmpty()) {
+        GlassCard(modifier = modifier) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "No QSOs yet",
+                    color = TextFaint,
+                    fontSize = 11.sp,
+                    fontFamily = GeistMonoFamily,
+                )
             }
+        }
+        return
+    }
+
+    // QSLCallsignRecord does not carry SNR, so we synthesize a coarse trend
+    // from the per-record index. This is a visualization placeholder until
+    // SNR is persisted on the QSO log row.
+    val dataPoints = remember(records) {
+        records.takeLast(30).mapIndexed { index, _ ->
+            val base = -15f + (index % 20) * 1.2f
+            base.coerceIn(-25f, 5f)
         }
     }
 
@@ -664,7 +979,12 @@ private fun SignalSparkline(
                 .fillMaxSize()
                 .padding(12.dp),
         ) {
-            drawSparkline(dataPoints, Signal, Signal.copy(alpha = 0.12f))
+            val p = progress.coerceIn(0f, 1f)
+            drawSparkline(
+                dataPoints,
+                Signal.copy(alpha = p),
+                Signal.copy(alpha = 0.12f * p),
+            )
         }
     }
 }
@@ -724,12 +1044,19 @@ private fun gridSquaresWorked(records: List<QSLCallsignRecord>): Int =
 // ===========================================================================
 
 @Composable
-private fun RecentTab(records: List<QSLCallsignRecord>) {
+private fun RecentTab(
+    records: List<QSLCallsignRecord>,
+    onEdit: (QSLCallsignRecord) -> Unit,
+    onDelete: (QSLCallsignRecord) -> Unit,
+) {
     if (records.isEmpty()) {
-        Box(
+        Column(
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            EmptyStateWaves(size = 180.dp)
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "No QSOs recorded yet",
                 color = TextFaint,
@@ -747,9 +1074,15 @@ private fun RecentTab(records: List<QSLCallsignRecord>) {
     ) {
         items(
             items = records.reversed(),
-            key = { "${it.callsign}_${it.lastTime}_${it.band}" },
+            // Include id so an edit that changes other fields still maps to a stable key,
+            // and so two grouped rows with otherwise identical display fields don't collide.
+            key = { "${it.id}_${it.callsign}_${it.lastTime}_${it.band}" },
         ) { record ->
-            QsoRow(record)
+            QsoRow(
+                record = record,
+                onEdit = { onEdit(record) },
+                onDelete = { onDelete(record) },
+            )
         }
 
         // Bottom spacer for safe area
@@ -762,17 +1095,39 @@ private fun RecentTab(records: List<QSLCallsignRecord>) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun QsoRow(record: QSLCallsignRecord) {
+private fun QsoRow(
+    record: QSLCallsignRecord,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val callsign = record.callsign ?: ""
     val grid = record.grid ?: ""
     val band = record.band ?: ""
     val time = record.lastTime ?: ""
     val dxcc = record.dxccStr ?: ""
+    val context = LocalContext.current
+    val state = UsStateLookup.stateFromGrid(context, grid)
+    var menuOpen by remember { mutableStateOf(false) }
 
+    // Show a status pill only when something positive has happened (worked or
+    // LoTW-confirmed). New rows default to no badge — the chip area to the right
+    // is where the sync indicators live.
     val status = when {
         record.isLotW_QSL -> QsoStatus.CONFIRMED
         record.isQSL -> QsoStatus.WORKED
-        else -> QsoStatus.PENDING
+        else -> null
+    }
+
+    // Build the secondary line entries (state takes precedence over DXCC when present
+    // because for US contacts the DXCC string is always just "United States" and the
+    // state is the more useful information).
+    val secondaryParts = buildList {
+        if (grid.isNotBlank()) add(grid to Signal)
+        if (!state.isNullOrBlank()) {
+            add("$state, USA" to TextMuted)
+        } else if (dxcc.isNotBlank()) {
+            add(dxcc to TextFaint)
+        }
     }
 
     GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -805,7 +1160,7 @@ private fun QsoRow(record: QSLCallsignRecord) {
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Callsign + grid + DX entity
+            // Callsign + grid + state/DX entity
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = callsign,
@@ -817,19 +1172,12 @@ private fun QsoRow(record: QSLCallsignRecord) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (grid.isNotBlank()) {
+                    secondaryParts.forEach { (text, color) ->
                         Text(
-                            text = grid,
-                            color = Signal,
+                            text = text,
+                            color = color,
                             fontSize = 10.sp,
                             fontFamily = GeistMonoFamily,
-                        )
-                    }
-                    if (dxcc.isNotBlank()) {
-                        Text(
-                            text = dxcc,
-                            color = TextFaint,
-                            fontSize = 10.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -839,9 +1187,116 @@ private fun QsoRow(record: QSLCallsignRecord) {
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Status pill
-            StatusPill(status = status, compact = true)
+            // Status pill — only shown when worked or LoTW-confirmed; brand-new QSOs
+            // get no badge to keep the row visually quiet.
+            if (status != null) {
+                StatusPill(status = status, compact = true)
+            }
+
+            // Sync-to-service indicator chips (independent of QSL state)
+            SyncChips(
+                cloudlog = record.syncedCloudlog,
+                qrz = record.syncedQrz,
+                cloudlogLabel = cloudlogFamilyLabel(GeneralVariables.cloudlogServerAddress),
+            )
+
+            // Overflow action menu (edit / delete)
+            Box {
+                IconButton(
+                    onClick = { menuOpen = true },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "QSO actions",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Edit", color = TextPrimary) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = null,
+                                tint = Accent,
+                            )
+                        },
+                        onClick = {
+                            menuOpen = false
+                            onEdit()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = StatusBad) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = null,
+                                tint = StatusBad,
+                            )
+                        },
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        },
+                    )
+                }
+            }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync-to-service chips ("CL" for Cloudlog/Wavelog/Nextlog, "QRZ" for QRZ)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun SyncChips(cloudlog: Boolean, qrz: Boolean, cloudlogLabel: String) {
+    if (!cloudlog && !qrz) return
+    Row(
+        modifier = Modifier.padding(start = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (cloudlog) SyncChip(label = cloudlogLabel)
+        if (qrz) SyncChip(label = "QRZ")
+    }
+}
+
+// Cloudlog, Wavelog, and Nextlog share an upload API but identify differently in
+// their hostnames. Pick the right short label from whatever the user configured.
+private fun cloudlogFamilyLabel(serverAddress: String?): String {
+    val host = serverAddress?.lowercase().orEmpty()
+    return when {
+        "wavelog" in host -> "WL"
+        "nextlog" in host -> "NL"
+        else -> "CL"
+    }
+}
+
+@Composable
+private fun SyncChip(label: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Signal.copy(alpha = 0.14f))
+            .border(1.dp, Signal.copy(alpha = 0.32f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "↑ $label",
+            color = Signal,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = GeistMonoFamily,
+            maxLines = 1,
+        )
     }
 }
 
@@ -1011,6 +1466,301 @@ private fun AwardCard(award: AwardProgress) {
                             ),
                     )
                 }
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// Per-row QSO edit / delete dialogs (Recent tab)
+// ===========================================================================
+
+@Composable
+private fun EditQsoDialog(
+    record: QSLCallsignRecord,
+    onDismiss: () -> Unit,
+    onSave: (callsign: String, grid: String, mode: String) -> Unit,
+) {
+    var callsignInput by remember {
+        mutableStateOf(TextFieldValue(record.callsign ?: ""))
+    }
+    var gridInput by remember {
+        mutableStateOf(TextFieldValue(record.grid ?: ""))
+    }
+    var modeInput by remember {
+        mutableStateOf(TextFieldValue(record.mode ?: ""))
+    }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        cursorColor = Accent,
+        focusedBorderColor = Accent,
+        unfocusedBorderColor = BorderStrong,
+        focusedLabelColor = Accent,
+        unfocusedLabelColor = TextMuted,
+    )
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgSurface2)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = "Edit QSO",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+            )
+
+            OutlinedTextField(
+                value = callsignInput,
+                onValueChange = { callsignInput = it },
+                label = { Text("Callsign") },
+                singleLine = true,
+                colors = fieldColors,
+                textStyle = TextStyle(
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = gridInput,
+                onValueChange = { gridInput = it },
+                label = { Text("Grid Locator") },
+                singleLine = true,
+                colors = fieldColors,
+                textStyle = TextStyle(
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 16.sp,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = modeInput,
+                onValueChange = { modeInput = it },
+                label = { Text("Mode") },
+                singleLine = true,
+                colors = fieldColors,
+                textStyle = TextStyle(
+                    fontFamily = GeistMonoFamily,
+                    fontSize = 16.sp,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = TextMuted)
+                }
+                TextButton(
+                    onClick = {
+                        onSave(callsignInput.text, gridInput.text, modeInput.text)
+                    },
+                ) {
+                    Text("Save", color = Accent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeleteQsoConfirm(
+    record: QSLCallsignRecord,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val callsign = record.callsign ?: ""
+
+    Dialog(
+        onDismissRequest = onCancel,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(BgSurface2)
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+        ) {
+            Text(
+                text = "DELETE QSO?",
+                color = TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = GeistMonoFamily,
+                letterSpacing = 0.06.sp,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = if (callsign.isNotBlank())
+                    "Remove the QSO with $callsign from the logbook? This cannot be undone."
+                else
+                    "Remove this QSO from the logbook? This cannot be undone.",
+                color = TextMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BgSurface3)
+                        .border(1.dp, Border, RoundedCornerShape(12.dp))
+                        .clickable(onClick = onCancel),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Cancel",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(StatusBad)
+                        .clickable(onClick = onConfirm),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Delete",
+                        color = BgApp,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatchUpSyncDialog(
+    state: SyncDialogState,
+    onDismiss: () -> Unit,
+) {
+    val dismissOnOutside = !state.inProgress
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = !state.inProgress,
+            dismissOnClickOutside = dismissOnOutside,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(BgSurface2)
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+        ) {
+            val title = when {
+                state.noServicesEnabled -> "NO SERVICES ENABLED"
+                state.inProgress -> "SYNCING…"
+                else -> "SYNC COMPLETE"
+            }
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = GeistMonoFamily,
+                letterSpacing = 0.06.sp,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (state.noServicesEnabled) {
+                Text(
+                    text = "Enable Cloudlog/Wavelog/Nextlog or QRZ in Settings, then try again.",
+                    color = TextMuted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+            } else {
+                val progress = if (state.total > 0) state.done.toFloat() / state.total else 0f
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "${state.done} of ${state.total} QSOs",
+                    color = TextMuted,
+                    fontSize = 13.sp,
+                )
+                if (state.cloudlogAttempted) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Cloudlog / Wavelog / Nextlog: ${state.cloudlogOk} accepted",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+                if (state.qrzAttempted) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "QRZ: ${state.qrzOk} accepted",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+                if (state.finished && state.total == 0) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "No QSOs in the logbook to upload yet.",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (state.inProgress) BgSurface3 else Accent)
+                    .let { m ->
+                        if (state.inProgress) m else m.clickable(onClick = onDismiss)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (state.inProgress) "Working…" else "Done",
+                    color = if (state.inProgress) TextMuted else BgApp,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                )
             }
         }
     }

@@ -42,6 +42,12 @@ public class QSLRecord {
     private long bandFreq;//Transmit band frequency
     private int wavFrequency;//Transmit audio frequency
     private String comment;
+    // POTA ADIF fields. mySig/mySigInfo describe my own activation (e.g. "POTA"/"K-1234");
+    // sig/sigInfo describe the worked station's activation if it was a hunt or P2P.
+    private String mySig;
+    private String mySigInfo;
+    private String sig;
+    private String sigInfo;
     public boolean isQSL = false;//Manual confirmation
     public boolean isLotW_import = false;//Whether imported from external data; requires database comparison to determine
     public boolean isLotW_QSL = false;//Whether confirmed via LoTW
@@ -66,7 +72,7 @@ public class QSLRecord {
         receivedReport = -100;
         bandLength = BaseRigOperation.getMeterFromFreq(GeneralVariables.band);//Get wavelength
         bandFreq = GeneralVariables.band;
-        comment = "SWL By FT8CN";
+        comment = "SWL By FT8AF";
     }
 
     /**
@@ -107,8 +113,8 @@ public class QSLRecord {
             distance = MaidenheadGrid.getDistStrEN(myMaidenGrid, toMaidenGrid);
         }
         this.comment =
-                distance.equals("") ? "QSO by FT8CN"
-                        : String.format("Distance: %s, QSO by FT8CN", distance);
+                distance.equals("") ? "QSO by FT8AF"
+                        : String.format("Distance: %s, QSO by FT8AF", distance);
     }
 
     public void update(QSLRecord record) {
@@ -226,6 +232,11 @@ public class QSLRecord {
                     , UtcTimer.getDatetimeStr(UtcTimer.getSystemTime()));
         }
 
+        // POTA activation/hunt metadata on import. pota.app exports use these field names.
+        if (map.containsKey("MY_SIG")) mySig = map.get("MY_SIG");
+        if (map.containsKey("MY_SIG_INFO")) mySigInfo = map.get("MY_SIG_INFO");
+        if (map.containsKey("SIG")) sig = map.get("SIG");
+        if (map.containsKey("SIG_INFO")) sigInfo = map.get("SIG_INFO");
 
     }
 
@@ -382,5 +393,37 @@ public class QSLRecord {
 
     public void setTime_on(String time_on) {
         this.time_on = time_on;
+    }
+
+    public String getMySig() {
+        return mySig;
+    }
+
+    public void setMySig(String mySig) {
+        this.mySig = mySig;
+    }
+
+    public String getMySigInfo() {
+        return mySigInfo;
+    }
+
+    public void setMySigInfo(String mySigInfo) {
+        this.mySigInfo = mySigInfo;
+    }
+
+    public String getSig() {
+        return sig;
+    }
+
+    public void setSig(String sig) {
+        this.sig = sig;
+    }
+
+    public String getSigInfo() {
+        return sigInfo;
+    }
+
+    public void setSigInfo(String sigInfo) {
+        this.sigInfo = sigInfo;
     }
 }

@@ -24,12 +24,22 @@ package com.bg7yoz.ft8cn;
 
 import static com.bg7yoz.ft8cn.GeneralVariables.getStringFromResource;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.PendingIntent;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothProfile;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import androidx.core.content.ContextCompat;
+import android.content.IntentFilter;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
 import android.media.AudioManager;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -112,6 +122,21 @@ public class MainViewModel extends ViewModel {
     String TAG = "ft8cn MainViewModel";
     public boolean configIsLoaded = false;
 
+    /** Write debug line to the app's external files debug.log */
+    private void fileLog(String msg) {
+        try {
+            android.content.Context ctx = GeneralVariables.getMainContext();
+            if (ctx == null) return;
+            java.io.File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) return;
+            String ts = new java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                    .format(new java.util.Date());
+            new java.io.FileWriter(new java.io.File(dir, "debug.log"), true)
+                    .append(ts + " " + msg + "\n").close();
+        } catch (Exception ignored) {}
+        Log.d(TAG, msg);
+    }
+
     private static MainViewModel viewModel = null;//current existing instance.
     //public static Application application;
 
@@ -151,6 +176,12 @@ public class MainViewModel extends ViewModel {
     public MutableLiveData<Integer> mutableShareCount=new MutableLiveData<>(0);//total shared count
     public MutableLiveData<Boolean> mutableImportShareRunning=new MutableLiveData<>(false);//whether importing shared data
 
+    // QSO bottom-sheet persistence (Compose UI). The callsign the sheet is
+    // currently bound to (null = no sheet) and whether the user has
+    // minimized it (slid down). Lives in the ViewModel so the sheet stays
+    // open across navigation away from Decode and back.
+    public MutableLiveData<String> qsoSheetCallsign = new MutableLiveData<>(null);
+    public MutableLiveData<Boolean> qsoSheetMinimized = new MutableLiveData<>(false);
 
 
     public HamRecorder hamRecorder;//recording object
@@ -306,6 +337,19 @@ public class MainViewModel extends ViewModel {
                     , ArrayList<Ft8Message> messages, boolean isDeep) {
                 if (messages.size() == 0) return;//no messages decoded, don't trigger action
 
+                // Diagnostic: log every CQ message so we can see what the JNI decoder
+                // populates for "CQ DX" / "CQ POTA" style broadcasts.
+                for (Ft8Message m : messages) {
+                    if (m.checkIsCQ()) {
+                        fileLog(String.format(
+                                "CQ_DEBUG i3=%d n3=%d to=[%s] from=[%s] extra=[%s] modifier=[%s] msgText=[%s]",
+                                m.i3, m.n3,
+                                m.callsignTo, m.callsignFrom, m.extraInfo,
+                                m.modifier == null ? "null" : m.modifier,
+                                m.getMessageText()));
+                    }
+                }
+
                 synchronized (ft8Messages) {
                     ft8Messages.addAll(messages);//add messages to list
                 }
@@ -319,12 +363,13 @@ public class MainViewModel extends ViewModel {
 
                 //check transmit procedure. Parse transmit procedure from message list
                 //if exceeded cycle by 2 seconds, should not parse
+                int autoReplyBudgetMs = Math.max(2000, GeneralVariables.lateStartTolerance);
                 if (!ft8TransmitSignal.isTransmitting()
                         && !isDeep//block deep decode from activating auto procedure
                         //deep decode list should be added to the new message list without deep decode
                         && (ft8SignalListener.timeSec
                         + GeneralVariables.pttDelay
-                        + GeneralVariables.transmitDelay <= 2000)) {//considering network mode, transmit duration is 13 seconds
+                        + GeneralVariables.transmitDelay <= autoReplyBudgetMs)) {//budget scales with late-start tolerance
                     ft8TransmitSignal.parseMessageToFunction(messages);//parse messages and process
                 }
 
@@ -475,11 +520,17 @@ public class MainViewModel extends ViewModel {
                 new Thread(new Runnable() {
                     @Override
                     public void run() {
+                        boolean cloudlogOk = false;
+                        boolean qrzOk = false;
                         if (GeneralVariables.enableCloudlog){
-                            ThirdPartyService.UploadToCloudLog(qslRecord);
+                            cloudlogOk = ThirdPartyService.UploadToCloudLog(qslRecord);
                         }
                         if (GeneralVariables.enableQRZ){
-                            ThirdPartyService.UploadToQRZ(qslRecord);
+                            qrzOk = ThirdPartyService.UploadToQRZ(qslRecord);
+                        }
+                        if (databaseOpr != null && (cloudlogOk || qrzOk)) {
+                            ThirdPartyService.markQsoSynced(
+                                    databaseOpr.getDb(), qslRecord, cloudlogOk, qrzOk);
                         }
                     }
                 }).start();
@@ -639,9 +690,12 @@ public class MainViewModel extends ViewModel {
      */
     public void setOperationBand() {
         if (!isRigConnected()) {
+            fileLog("setOperationBand: rig not connected, skipping");
             return;
         }
 
+        fileLog("setOperationBand: sending USB mode, then freq=" + GeneralVariables.band
+                + " in 800ms (controlMode=" + GeneralVariables.controlMode + ")");
         //set USB mode first, then set frequency
         baseRig.setUsbModeToRig();//set USB mode
 
@@ -649,6 +703,8 @@ public class MainViewModel extends ViewModel {
         new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
             @Override
             public void run() {
+                fileLog("setOperationBand: setting freq=" + GeneralVariables.band
+                        + " (rig.getFreq=" + baseRig.getFreq() + ")");
                 baseRig.setFreq(GeneralVariables.band);//set frequency
                 baseRig.setFreqToRig();
             }
@@ -677,6 +733,7 @@ public class MainViewModel extends ViewModel {
     public void connectCableRig(Context context, CableSerialPort.SerialPort port) {
         if (GeneralVariables.controlMode == ControlMode.VOX) {//if currently VOX, switch to CAT mode
             GeneralVariables.controlMode = ControlMode.CAT;
+            databaseOpr.writeConfig("ctrMode", String.valueOf(ControlMode.CAT), null);
         }
         connectRig();
 
@@ -898,6 +955,9 @@ public class MainViewModel extends ViewModel {
             case InstructionSet.YAESU_DX10:
                 baseRig = new YaesuDX10Rig();//YAESU DX10 DX101
                 break;
+            case InstructionSet.YAESU_FT710:
+                baseRig = new YaesuDX10Rig();//FT-710 reuses DX10 CAT; FT-710-specific fix is in CableSerialPort
+                break;
             case InstructionSet.KENWOOD_TS590:
                 baseRig = new KenwoodTS590Rig();//KENWOOD TS590
                 break;
@@ -963,6 +1023,16 @@ public class MainViewModel extends ViewModel {
 
     }
 
+
+    /**
+     * Reinitialize the audio input to pick up newly connected USB audio devices.
+     * Call this after a USB device attach event to switch to USB audio if available.
+     */
+    public void reinitializeAudioInput() {
+        if (hamRecorder != null) {
+            hamRecorder.reinitializeMicRecorder();
+        }
+    }
 
     /**
      * Check whether the rig is connected. Two cases: rigBaseClass not created, or serial port connection failed.
@@ -1062,13 +1132,28 @@ public class MainViewModel extends ViewModel {
      */
     @SuppressLint("MissingPermission")
     public boolean isBTConnected() {
+        // On Android 12+, getProfileConnectionState requires BLUETOOTH_CONNECT.
+        // ComposeMainActivity.onCreate asks for it asynchronously, so on the first launch this
+        // method may run before the user has answered the prompt — return false rather than crash.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Context ctx = GeneralVariables.getMainContext();
+            if (ctx == null
+                    || ContextCompat.checkSelfPermission(ctx, Manifest.permission.BLUETOOTH_CONNECT)
+                            != PackageManager.PERMISSION_GRANTED) {
+                return false;
+            }
+        }
         BluetoothAdapter blueAdapter = BluetoothAdapter.getDefaultAdapter();
         if (blueAdapter == null) return false;
 
-        //Bluetooth headset, supports voice input and output
-        int headset = blueAdapter.getProfileConnectionState(BluetoothProfile.HEADSET);
-        int a2dp = blueAdapter.getProfileConnectionState(BluetoothProfile.A2DP);
-        return headset == BluetoothAdapter.STATE_CONNECTED || a2dp == BluetoothAdapter.STATE_CONNECTED;
+        try {
+            //Bluetooth headset, supports voice input and output
+            int headset = blueAdapter.getProfileConnectionState(BluetoothProfile.HEADSET);
+            int a2dp = blueAdapter.getProfileConnectionState(BluetoothProfile.A2DP);
+            return headset == BluetoothAdapter.STATE_CONNECTED || a2dp == BluetoothAdapter.STATE_CONNECTED;
+        } catch (SecurityException se) {
+            return false;
+        }
     }
 
     private static class GetQTHRunnable implements Runnable {
@@ -1105,6 +1190,58 @@ public class MainViewModel extends ViewModel {
     protected void onCleared() {
         super.onCleared();
         PskReporterSender.INSTANCE.stop();
+    }
+
+    private static final String ACTION_USB_AUDIO_PERMISSION =
+            "com.bg7yoz.ft8cn.USB_AUDIO_PERMISSION";
+
+    /**
+     * Request USB audio device permission if not already granted.
+     * Mirrors ConfigFragment.requestUsbPermissionIfNeeded().
+     */
+    public void requestUsbPermissionIfNeeded(UsbDevice device) {
+        if (device == null) return;
+        Context context = GeneralVariables.getMainContext();
+        if (context == null) return;
+        UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        if (usbManager == null) return;
+
+        if (usbManager.hasPermission(device)) {
+            Log.d(TAG, "USB audio device already has permission");
+            return;
+        }
+
+        Log.d(TAG, "Requesting USB permission for audio device: " + device.getProductName());
+        PendingIntent permissionIntent;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissionIntent = PendingIntent.getBroadcast(context, 0,
+                    new Intent(ACTION_USB_AUDIO_PERMISSION), PendingIntent.FLAG_MUTABLE);
+        } else {
+            permissionIntent = PendingIntent.getBroadcast(context, 0,
+                    new Intent(ACTION_USB_AUDIO_PERMISSION), PendingIntent.FLAG_IMMUTABLE);
+        }
+
+        BroadcastReceiver permReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context ctx, Intent intent) {
+                if (ACTION_USB_AUDIO_PERMISSION.equals(intent.getAction())) {
+                    boolean granted = intent.getBooleanExtra(
+                            UsbManager.EXTRA_PERMISSION_GRANTED, false);
+                    Log.d(TAG, "USB audio permission " + (granted ? "granted" : "denied"));
+                    try { ctx.unregisterReceiver(this); } catch (Exception ignored) {}
+                }
+            }
+        };
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(permReceiver,
+                    new IntentFilter(ACTION_USB_AUDIO_PERMISSION),
+                    Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            context.registerReceiver(permReceiver,
+                    new IntentFilter(ACTION_USB_AUDIO_PERMISSION));
+        }
+        usbManager.requestPermission(device, permissionIntent);
     }
 
 }

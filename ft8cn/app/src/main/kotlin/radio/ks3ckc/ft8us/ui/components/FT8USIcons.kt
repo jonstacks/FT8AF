@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Custom icon set for FT8US, drawn as stroked paths matching the design prototype.
+ * Custom icon set for FT8AF, drawn as stroked paths matching the design prototype.
  * All icons use a 24x24 coordinate space.
  */
 object FT8USIcons {
@@ -335,6 +335,35 @@ object FT8USIcons {
             drawCircle(tint, 9f * s, Offset(12f * s, 12f * s), style = stroke)
             drawCircle(tint, 5f * s, Offset(12f * s, 12f * s), style = stroke)
             drawCircle(tint, 1.5f * s, Offset(12f * s, 12f * s)) // filled
+        }
+    }
+
+    /** Triangular pine tree on a small trunk — POTA tab. */
+    @Composable
+    fun Tree(
+        modifier: Modifier = Modifier,
+        color: Color = Color.Unspecified,
+        size: Dp = 22.dp,
+        strokeWidth: Float = 1.6f,
+    ) {
+        val tint = if (color == Color.Unspecified) androidx.compose.material3.MaterialTheme.colorScheme.onSurface else color
+        Canvas(modifier = modifier.then(Modifier.sizeOf(size))) {
+            val s = this.size.width / 24f
+            val stroke = strokeStyle(strokeWidth * s)
+            // Trunk
+            drawLine(tint, Offset(12f * s, 19f * s), Offset(12f * s, 17f * s), stroke.width, StrokeCap.Round)
+            // Three stacked triangles (foliage)
+            val crown = Path().apply {
+                moveTo(12f * s, 3f * s)
+                lineTo(6f * s, 11f * s)
+                lineTo(9f * s, 11f * s)
+                lineTo(5f * s, 17f * s)
+                lineTo(19f * s, 17f * s)
+                lineTo(15f * s, 11f * s)
+                lineTo(18f * s, 11f * s)
+                close()
+            }
+            drawPath(crown, tint, style = stroke)
         }
     }
 }

@@ -1,7 +1,15 @@
 package radio.ks3ckc.ft8us.ui.decode
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,9 +31,12 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bg7yoz.ft8cn.Ft8Message
@@ -68,7 +79,6 @@ fun QsoSheet(
             QsoSheetContent(
                 message = message,
                 mainViewModel = mainViewModel,
-                onDismiss = onDismiss,
             )
         }
     }
@@ -78,12 +88,16 @@ fun QsoSheet(
 private fun QsoSheetContent(
     message: Ft8Message,
     mainViewModel: MainViewModel,
-    onDismiss: () -> Unit,
 ) {
     val callsign = message.callsignFrom ?: ""
     val status = resolveQsoStatus(message)
+    val context = LocalContext.current
     val isTransmitting by mainViewModel.ft8TransmitSignal.mutableIsTransmitting.observeAsState(false)
     val isActivated by mainViewModel.ft8TransmitSignal.mutableIsActivated.observeAsState(false)
+    val toCallsign by mainViewModel.ft8TransmitSignal.mutableToCallsign.observeAsState()
+    val txFunctionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
+
+    val usState = UsStateLookup.stateFromGrid(context, message.maidenGrid)
 
     Column(
         modifier = Modifier
@@ -94,8 +108,19 @@ private fun QsoSheetContent(
         StationHeader(
             callsign = callsign,
             status = status,
-            location = message.fromWhere,
+            country = message.fromWhere,
+            state = usState,
             grid = message.maidenGrid,
+            onQrzClick = {
+                try {
+                    val intent = Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("https://www.qrz.com/db/${Uri.encode(callsign)}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                }
+            },
         )
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -106,10 +131,30 @@ private fun QsoSheetContent(
         Spacer(modifier = Modifier.height(20.dp))
 
         // -- QSO sequence visualizer --
+        val liveQsoIsThisCallsign =
+            isActivated && toCallsign?.callsign?.equals(callsign, ignoreCase = true) == true
         QsoSequenceVisualizer(
             callsign = callsign,
             message = message,
+            isLiveQso = liveQsoIsThisCallsign,
+            liveFunctionOrder = txFunctionOrder ?: 6,
+            isTransmitting = isTransmitting,
+        )
+
+        // -- Current TX banner: always shows what's queued to transmit next --
+        CurrentTxBanner(
+            mainViewModel = mainViewModel,
             isActivated = isActivated,
+            isTransmitting = isTransmitting,
+        )
+
+        // -- Live QSO status (contextual: TX'ing call / waiting for reply) --
+        QsoLiveStatusRow(
+            callsign = callsign,
+            message = message,
+            isLiveQso = liveQsoIsThisCallsign,
+            isTransmitting = isTransmitting,
+            liveFunctionOrder = txFunctionOrder ?: 6,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -145,8 +190,17 @@ private fun QsoSheetContent(
             Button(
                 onClick = {
                     mainViewModel.addFollowCallsign(callsign)
-                    mainViewModel.ft8TransmitSignal.setActivated(true)
-                    onDismiss()
+                    if (!mainViewModel.ft8TransmitSignal.isActivated) {
+                        mainViewModel.ft8TransmitSignal.setActivated(true)
+                        GeneralVariables.transmitMessages.add(message)
+                        GeneralVariables.resetLaunchSupervision()
+                    }
+                    mainViewModel.ft8TransmitSignal.setTransmit(
+                        message.fromCallTransmitCallsign,
+                        1,
+                        message.extraInfo,
+                    )
+                    mainViewModel.ft8TransmitSignal.transmitNow()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -179,30 +233,22 @@ private fun QsoSheetContent(
 @Composable
 private fun StationHeader(
     callsign: String,
-    status: QsoStatus,
-    location: String?,
+    status: QsoStatus?,
+    country: String?,
+    state: String?,
     grid: String?,
+    onQrzClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Callsign avatar circle
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(BgElev),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = callsign.take(2),
-                color = Accent,
-                fontFamily = GeistMonoFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-        }
+        // Callsign avatar circle (QRZ profile image with initials fallback)
+        QrzAvatar(
+            callsign = callsign,
+            size = 48.dp,
+            fallbackText = callsign.take(2),
+        )
 
         Spacer(modifier = Modifier.width(14.dp))
 
@@ -218,15 +264,14 @@ private fun StationHeader(
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp,
                 )
-                StatusPill(status = status, compact = true)
+                if (status != null) {
+                    StatusPill(status = status, compact = true)
+                }
             }
 
-            // Location info
-            val locationParts = buildList {
-                if (!location.isNullOrEmpty()) add(location)
-                if (!grid.isNullOrEmpty()) add(grid)
-            }
-            if (locationParts.isNotEmpty()) {
+            // Location info: combine state + country + grid into a single sentence
+            val locationText = formatLocationLine(state = state, country = country, grid = grid)
+            if (!locationText.isNullOrEmpty()) {
                 Row(
                     modifier = Modifier.padding(top = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -234,14 +279,65 @@ private fun StationHeader(
                 ) {
                     FT8USIcons.Globe(color = TextFaint, size = 12.dp)
                     Text(
-                        text = locationParts.joinToString(" \u2022 "),
+                        text = locationText,
                         color = TextMuted,
                         fontSize = 12.sp,
                     )
                 }
             }
+
+            // QRZ link
+            Row(
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable(onClick = onQrzClick)
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "QRZ \u2197",
+                    color = Signal,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textDecoration = TextDecoration.Underline,
+                    letterSpacing = 0.04.sp,
+                )
+            }
         }
     }
+}
+
+/**
+ * Build a human-readable single-line location label combining (in order):
+ *   state, country (collapsed when redundant with state), grid.
+ * Returns null when none of the inputs are usable.
+ */
+private fun formatLocationLine(
+    state: String?,
+    country: String?,
+    grid: String?,
+): String? {
+    val countryClean = country?.trim()
+    val isUs = countryClean?.contains("United States", ignoreCase = true) == true ||
+        countryClean.equals("USA", ignoreCase = true)
+
+    val placeText = when {
+        !state.isNullOrEmpty() && isUs -> "$state, USA"
+        !state.isNullOrEmpty() && countryClean.isNullOrEmpty() -> "$state, USA"
+        !state.isNullOrEmpty() -> "$state, $countryClean"
+        countryClean.isNullOrEmpty() -> null
+        countryClean == "United States of America" -> "USA"
+        countryClean == "United Kingdom" -> "UK"
+        else -> countryClean
+    }
+
+    val parts = buildList {
+        if (!placeText.isNullOrEmpty()) add(placeText)
+        if (!grid.isNullOrEmpty()) add(grid)
+    }
+    return if (parts.isEmpty()) null else parts.joinToString(" \u2022 ")
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +421,75 @@ private fun StatCard(
 // QSO Sequence Visualizer
 // ---------------------------------------------------------------------------
 
+private val QsoStepLabels = listOf("call", "report", "roger", "confirm", "73")
+
+/**
+ * Resolve which step (0..4) the QSO is currently on, or -1 for "not started".
+ * Shared by the visualizer and the live status row so they cannot diverge.
+ *
+ * Just-viewing (no active QSO) always returns -1 so the sequence stays
+ * grayed out until the operator commits via the Call button. Step state
+ * only lights up for a live QSO with this callsign or for a previously
+ * worked-and-confirmed call (which lights all 5 as complete).
+ */
+private fun computeCurrentStepIndex(
+    message: Ft8Message,
+    isLiveQso: Boolean,
+    liveFunctionOrder: Int,
+): Int {
+    val isFullyComplete = message.isQSL_Callsign && !isLiveQso
+    return when {
+        isFullyComplete -> 5
+        isLiveQso -> when (liveFunctionOrder) {
+            1 -> 0
+            2 -> 1
+            3 -> 2
+            4 -> 3
+            5 -> 4
+            else -> -1
+        }
+        else -> -1
+    }
+}
+
+@Composable
+private fun QsoLiveStatusRow(
+    callsign: String,
+    message: Ft8Message,
+    isLiveQso: Boolean,
+    isTransmitting: Boolean,
+    liveFunctionOrder: Int,
+) {
+    val text = when {
+        isLiveQso && isTransmitting -> {
+            val idx = computeCurrentStepIndex(message, true, liveFunctionOrder)
+            val stepLabel = QsoStepLabels.getOrNull(idx) ?: "message"
+            "QSOing with $callsign — Sending $stepLabel"
+        }
+        isLiveQso && !isTransmitting -> "Waiting for $callsign to reply…"
+        !isLiveQso && isTransmitting -> "Transmitting…"
+        else -> null
+    } ?: return
+
+    Spacer(modifier = Modifier.height(8.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(BgElev)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = text,
+            color = Accent,
+            fontFamily = GeistMonoFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+        )
+    }
+}
+
 private data class QsoStep(
     val label: String,
     val txRxLabel: String,
@@ -335,14 +500,12 @@ private data class QsoStep(
 private fun QsoSequenceVisualizer(
     callsign: String,
     message: Ft8Message,
-    isActivated: Boolean,
+    isLiveQso: Boolean,
+    liveFunctionOrder: Int,
+    isTransmitting: Boolean,
 ) {
     val myCall = GeneralVariables.myCallsign ?: ""
-    val grid = message.maidenGrid ?: ""
     val myGrid = GeneralVariables.getMyMaidenhead4Grid() ?: ""
-
-    // Determine current QSO step based on extraInfo
-    val currentFunOrder = GeneralVariables.checkFunOrder(message)
 
     val steps = listOf(
         QsoStep(
@@ -372,16 +535,7 @@ private fun QsoSequenceVisualizer(
         ),
     )
 
-    // Map fun order to completed step count
-    val completedSteps = when {
-        currentFunOrder >= 5 -> 5  // 73 sent -> all done
-        currentFunOrder == 4 -> 4  // RR73/RRR received
-        currentFunOrder == 3 -> 3  // R-report sent
-        currentFunOrder == 2 -> 2  // Report received
-        currentFunOrder == 1 -> 1  // Grid / initial call
-        isActivated -> 0           // Activated but not started
-        else -> -1                 // Not started
-    }
+    val currentStepIndex = computeCurrentStepIndex(message, isLiveQso, liveFunctionOrder)
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -396,15 +550,17 @@ private fun QsoSequenceVisualizer(
             modifier = Modifier.padding(bottom = 10.dp),
         )
 
+        // Always render every step; state is per-step.
         steps.forEachIndexed { index, step ->
-            val isComplete = index < completedSteps
-            val isCurrent = index == completedSteps
+            val isComplete = index < currentStepIndex
+            val isCurrent = index == currentStepIndex && currentStepIndex in 0..4
 
             QsoStepRow(
                 stepNumber = index + 1,
                 step = step,
                 isComplete = isComplete,
                 isCurrent = isCurrent,
+                pulse = isCurrent && (isLiveQso || isTransmitting),
                 isLast = index == steps.lastIndex,
             )
         }
@@ -417,6 +573,7 @@ private fun QsoStepRow(
     step: QsoStep,
     isComplete: Boolean,
     isCurrent: Boolean,
+    pulse: Boolean,
     isLast: Boolean,
 ) {
     val stepColor = when {
@@ -430,9 +587,37 @@ private fun QsoStepRow(
         else -> TextDim
     }
     val txRxColor = when (step.txRxLabel) {
-        "TX" -> StatusBad
-        "RX" -> Signal
+        "TX" -> if (isComplete || isCurrent) StatusBad else TextDim
+        "RX" -> if (isComplete || isCurrent) Signal else TextDim
         else -> TextDim
+    }
+
+    // Pulse animation: only when this is the active step in a live QSO.
+    val pulseScale: Float
+    val pulseAlpha: Float
+    if (pulse) {
+        val transition = rememberInfiniteTransition(label = "qso-step-pulse")
+        pulseScale = transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.18f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 900),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "pulse-scale",
+        ).value
+        pulseAlpha = transition.animateFloat(
+            initialValue = 0.25f,
+            targetValue = 0.55f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 900),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "pulse-alpha",
+        ).value
+    } else {
+        pulseScale = 1f
+        pulseAlpha = 0f
     }
 
     Row(
@@ -441,38 +626,57 @@ private fun QsoStepRow(
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Step indicator (number or check)
+        // Step indicator (number, pulsing dot, or check)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.width(28.dp),
         ) {
             Box(
-                modifier = Modifier
-                    .size(22.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isComplete) StatusConfirmed.copy(alpha = 0.15f)
-                        else if (isCurrent) Accent.copy(alpha = 0.15f)
-                        else BgSurface3
-                    )
-                    .border(
-                        1.dp,
-                        if (isComplete) StatusConfirmed.copy(alpha = 0.4f)
-                        else if (isCurrent) Accent.copy(alpha = 0.4f)
-                        else Border,
-                        CircleShape,
-                    ),
+                modifier = Modifier.size(22.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                if (isComplete) {
-                    FT8USIcons.Check(color = StatusConfirmed, size = 12.dp)
-                } else {
-                    Text(
-                        text = "$stepNumber",
-                        color = stepColor,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
+                // Pulse halo behind the indicator while active.
+                if (pulse) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .scale(pulseScale)
+                            .clip(CircleShape)
+                            .background(Accent.copy(alpha = pulseAlpha)),
                     )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when {
+                                isComplete -> StatusConfirmed.copy(alpha = 0.18f)
+                                isCurrent -> Accent.copy(alpha = 0.18f)
+                                else -> BgSurface3
+                            },
+                        )
+                        .border(
+                            1.dp,
+                            when {
+                                isComplete -> StatusConfirmed.copy(alpha = 0.5f)
+                                isCurrent -> Accent.copy(alpha = 0.6f)
+                                else -> Border
+                            },
+                            CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isComplete) {
+                        FT8USIcons.Check(color = StatusConfirmed, size = 12.dp)
+                    } else {
+                        Text(
+                            text = "$stepNumber",
+                            color = stepColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
 
@@ -482,7 +686,9 @@ private fun QsoStepRow(
                     modifier = Modifier
                         .width(1.dp)
                         .height(12.dp)
-                        .background(if (isComplete) StatusConfirmed.copy(alpha = 0.3f) else Border)
+                        .background(
+                            if (isComplete) StatusConfirmed.copy(alpha = 0.3f) else Border,
+                        ),
                 )
             }
         }
@@ -517,15 +723,68 @@ private fun QsoStepRow(
                     )
                 }
             }
-            // Message preview
+            // Message preview (dimmer when neither current nor complete).
             Text(
                 text = step.messagePreview,
-                color = TextDim,
+                color = if (isComplete || isCurrent) TextDim else TextDim.copy(alpha = 0.55f),
                 fontFamily = GeistMonoFamily,
                 fontSize = 10.sp,
                 modifier = Modifier.padding(top = 1.dp),
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Current TX Banner
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun CurrentTxBanner(
+    mainViewModel: MainViewModel,
+    isActivated: Boolean,
+    isTransmitting: Boolean,
+) {
+    val functions by mainViewModel.ft8TransmitSignal.mutableFunctions.observeAsState(arrayListOf())
+    val functionOrder by mainViewModel.ft8TransmitSignal.mutableFunctionOrder.observeAsState(6)
+
+    if (!isActivated) return
+
+    val currentFn = functions?.firstOrNull { it.functionOrder == functionOrder } ?: return
+    val messageText = currentFn.functionMessage?.takeIf { it.isNotBlank() } ?: return
+
+    val labelText = if (isTransmitting) "TX NOW" else "TX NEXT"
+    val labelColor = if (isTransmitting) StatusBad else Accent
+
+    Spacer(modifier = Modifier.height(14.dp))
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(labelColor.copy(alpha = 0.08f))
+            .border(1.dp, labelColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = labelText,
+            color = labelColor,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.08.sp,
+            modifier = Modifier
+                .background(labelColor.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = messageText,
+            color = TextPrimary,
+            fontFamily = GeistMonoFamily,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

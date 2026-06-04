@@ -106,7 +106,7 @@ public class HelpDialog extends Dialog {
         getNewButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                jumpUriToBrowser(context,"https://github.com/N0BOY/FT8CN/releases");
+                jumpUriToBrowser(context,"https://github.com/patrickrb/FT8AF/releases");
             }
         });
 

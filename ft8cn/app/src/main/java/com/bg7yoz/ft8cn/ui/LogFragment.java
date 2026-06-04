@@ -162,11 +162,11 @@ public class LogFragment extends Fragment {
             }
         });
 
-        // Share log button
+        // Share log button — opens the new export sheet (ADIF .adi share or Save to Downloads).
         binding.shareLogImageButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                buildShareLogs();
+                new ExportLogSheet(requireContext(), mainViewModel).show();
             }
         });
 
@@ -228,7 +228,7 @@ public class LogFragment extends Fragment {
             public void run() {
 
                 File adiFile = GeneralVariables.writeToTempFile(requireContext()
-                        , "FT8CN"
+                        , "FT8AF"
                         , ".txt"
                         , "");
 
@@ -303,6 +303,17 @@ public class LogFragment extends Fragment {
                     Intent intent = new Intent(requireContext(), GridTrackerMainActivity.class);
                     intent.putExtra("qslList", logQSLAdapter.getRecord(position));
                     startActivity(intent);
+                    break;
+                case 4:
+                    final int editPos = position;
+                    new EditQSLDialog(requireContext(), mainViewModel
+                            , logQSLAdapter.getRecord(position)
+                            , new EditQSLDialog.OnSaved() {
+                                @Override
+                                public void onSaved(QSLRecordStr updated) {
+                                    logQSLAdapter.notifyItemChanged(editPos);
+                                }
+                            }).show();
                     break;
 
             }

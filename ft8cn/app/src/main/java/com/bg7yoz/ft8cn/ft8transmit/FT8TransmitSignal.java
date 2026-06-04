@@ -55,9 +55,13 @@ public class FT8TransmitSignal {
     public MutableLiveData<Boolean> mutableIsActivated = new MutableLiveData<>();
     public volatile int sequential;// transmit sequence
     public MutableLiveData<Integer> mutableSequential = new MutableLiveData<>();
+    private volatile boolean pendingUserCQ = false;
     private volatile boolean isTransmitting = false;
     public MutableLiveData<Boolean> mutableIsTransmitting = new MutableLiveData<>();// whether currently transmitting
     public MutableLiveData<String> mutableTransmittingMessage = new MutableLiveData<>();// current message content
+    // Posts a tick (the QSO end timestamp) every time a QSO completes successfully — used to drive
+    // UI celebrations. Observers should treat the value as a one-shot signal (consume + ignore prior).
+    public MutableLiveData<Long> mutableQsoCompletedAt = new MutableLiveData<>();
 
     //public MutableLiveData<Integer> currentOrder = new MutableLiveData<>();// current command to transmit
 
@@ -81,11 +85,20 @@ public class FT8TransmitSignal {
     private AudioFormat myFormat = null;
     private AudioTrack audioTrack = null;
 
+    // Milliseconds we are late into the current cycle; leading audio is clipped
+    // so the TX still finishes on the cycle boundary. Set just before playback.
+    private volatile int lateStartSkipMs = 0;
+
     public UtcTimer utcTimer;
 
 
     public ArrayList<FunctionOfTransmit> functionList = new ArrayList<>();
     public MutableLiveData<ArrayList<FunctionOfTransmit>> mutableFunctions = new MutableLiveData<>();
+
+    // Caller queue: stations that called us while we're in an active QSO
+    private static final int MAX_QUEUE_SIZE = 10;
+    private final ArrayList<QueuedCaller> callerQueue = new ArrayList<>();
+    public MutableLiveData<ArrayList<QueuedCaller>> mutableCallerQueue = new MutableLiveData<>();
 
     private final OnDoTransmitted onDoTransmitted;// typically used for opening/closing PTT
     private final ExecutorService doTransmitThreadPool = Executors.newCachedThreadPool();
@@ -168,7 +181,11 @@ public class FT8TransmitSignal {
         resetTargetReport();
 
         if (UtcTimer.getNowSequential() == sequential) {
-            if ((UtcTimer.getSystemTime() % 15000) < 2500) {
+            long msInCycle = UtcTimer.getSystemTime() % 15000;
+            int tolerance = GeneralVariables.lateStartTolerance;
+            if (tolerance < 0) tolerance = 0;
+            if (tolerance > 4000) tolerance = 4000;
+            if (msInCycle < tolerance) {
                 setTransmitting(false);
                 doTransmit();
             }
@@ -402,12 +419,25 @@ public class FT8TransmitSignal {
             return;
         }
 
-        // USB audio output path
+        // USB audio output path. Logged so a dev-screen reader can see
+        // which branch was taken — the difference between TX going out
+        // the USB radio (this branch) vs. Android's default sink (the
+        // AudioTrack branch below) was the whole reason for #84, and we
+        // currently have no way to tell from debug.log which one fired.
+        GeneralVariables.fileLog(String.format(
+                "playFT8Signal: TX path branch: audioOutputDeviceId=%d "
+                        + "usbAudioOutputVidPid=%04X:%04X",
+                GeneralVariables.audioOutputDeviceId,
+                GeneralVariables.usbAudioOutputVendorId,
+                GeneralVariables.usbAudioOutputProductId));
         if (GeneralVariables.audioOutputDeviceId == -1
                 && GeneralVariables.usbAudioOutputVendorId != 0) {
+            GeneralVariables.fileLog("playFT8Signal: using USB audio (direct) output");
             playViaUsbAudio(buffer);
             return;
         }
+        GeneralVariables.fileLog(
+                "playFT8Signal: using AudioTrack output (Android default sink)");
 
         Log.d(TAG, String.format("playFT8Signal: Preparing sound card playback... bit depth: %s, sample rate: %d"
                 , GeneralVariables.audioOutput32Bit ? "Float32" : "Int16"
@@ -436,19 +466,25 @@ public class FT8TransmitSignal {
             audioTrack.setPreferredDevice(deviceInfo); // null resets to default
         }
 
+        // Skip leading samples if we started transmitting late, so audio still ends on the cycle boundary.
+        int skipSamples = (lateStartSkipMs * GeneralVariables.audioSampleRate) / 1000;
+        if (skipSamples < 0) skipSamples = 0;
+        if (skipSamples >= buffer.length) skipSamples = 0;
+        int playLength = buffer.length - skipSamples;
+
         // distinguish between 32-bit float and integer
         int writeResult;
         if (GeneralVariables.audioOutput32Bit) {
-            writeResult = audioTrack.write(buffer, 0, buffer.length
+            writeResult = audioTrack.write(buffer, skipSamples, playLength
                     , AudioTrack.WRITE_NON_BLOCKING);
         } else {
             short[] audio_data = float2Short(buffer);
-            writeResult = audioTrack.write(audio_data, 0, audio_data.length
+            writeResult = audioTrack.write(audio_data, skipSamples, playLength
                     , AudioTrack.WRITE_NON_BLOCKING);
         }
 
-        if (buffer.length > writeResult) {
-            Log.e(TAG, String.format("Playback buffer insufficient: %d--->%d", buffer.length, writeResult));
+        if (playLength > writeResult) {
+            Log.e(TAG, String.format("Playback buffer insufficient: %d--->%d", playLength, writeResult));
         }
 
         // check write result; if abnormal, release resources immediately
@@ -461,7 +497,7 @@ public class FT8TransmitSignal {
             afterPlayAudio();
             return;
         }
-        audioTrack.setNotificationMarkerPosition(buffer.length);
+        audioTrack.setNotificationMarkerPosition(playLength);
         audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
             @Override
             public void onMarkerReached(AudioTrack audioTrack) {
@@ -483,14 +519,15 @@ public class FT8TransmitSignal {
      * Play FT8 signal through USB audio device.
      */
     private void playViaUsbAudio(float[] buffer) {
-        Log.d(TAG, String.format("playFT8Signal: USB audio output, VID=%04X PID=%04X, samples=%d, rate=%d",
+        GeneralVariables.fileLog(String.format(
+                "playViaUsbAudio: start, VID=%04X PID=%04X samples=%d rate=%d",
                 GeneralVariables.usbAudioOutputVendorId,
                 GeneralVariables.usbAudioOutputProductId,
                 buffer.length, GeneralVariables.audioSampleRate));
 
         Context context = GeneralVariables.getMainContext();
         if (context == null) {
-            Log.e(TAG, "No context for USB audio");
+            GeneralVariables.fileLog("playViaUsbAudio: ABORT no main context");
             afterPlayAudio();
             return;
         }
@@ -499,49 +536,75 @@ public class FT8TransmitSignal {
                 GeneralVariables.usbAudioOutputVendorId,
                 GeneralVariables.usbAudioOutputProductId);
         if (device == null) {
-            Log.e(TAG, "USB audio output device not found");
+            GeneralVariables.fileLog(String.format(
+                    "playViaUsbAudio: ABORT USB audio output device not found "
+                            + "by VID:PID %04X:%04X",
+                    GeneralVariables.usbAudioOutputVendorId,
+                    GeneralVariables.usbAudioOutputProductId));
             afterPlayAudio();
             return;
         }
 
         UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
-        if (usbManager == null || !usbManager.hasPermission(device)) {
-            Log.e(TAG, "No USB permission for audio output device");
+        if (usbManager == null) {
+            GeneralVariables.fileLog("playViaUsbAudio: ABORT UsbManager is null");
+            afterPlayAudio();
+            return;
+        }
+        if (!usbManager.hasPermission(device)) {
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT no USB permission for output device "
+                            + "(re-pick (USB direct) in Settings to re-grant)");
             afterPlayAudio();
             return;
         }
 
         UsbAudioDevice usbDev = new UsbAudioDevice();
         if (!usbDev.open(context, device)) {
-            Log.e(TAG, "Failed to open USB audio output device");
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT UsbAudioDevice.open() failed "
+                            + "(descriptor parse or claimInterface failed)");
             afterPlayAudio();
             return;
         }
 
         if (!usbDev.hasOutput()) {
-            Log.e(TAG, "USB audio device has no output endpoint");
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT device has no output endpoint");
             usbDev.close();
             afterPlayAudio();
             return;
         }
 
         if (!usbDev.activateOutput(48000)) {
-            Log.e(TAG, "Failed to activate USB audio output");
+            GeneralVariables.fileLog(
+                    "playViaUsbAudio: ABORT activateOutput(48000) failed "
+                            + "(alt-setting select or rate setup failed)");
             usbDev.close();
             afterPlayAudio();
             return;
         }
+        GeneralVariables.fileLog(
+                "playViaUsbAudio: device opened, output activated at 48000 Hz");
+
+        // Skip leading samples if we started transmitting late, so audio still ends on the cycle boundary.
+        int skipSamples = (lateStartSkipMs * GeneralVariables.audioSampleRate) / 1000;
+        if (skipSamples < 0) skipSamples = 0;
+        if (skipSamples >= buffer.length) skipSamples = 0;
+        int playLength = buffer.length - skipSamples;
 
         // Apply volume
-        float[] volumeAdjusted = new float[buffer.length];
-        for (int i = 0; i < buffer.length; i++) {
-            volumeAdjusted[i] = buffer[i] * GeneralVariables.volumePercent;
+        float[] volumeAdjusted = new float[playLength];
+        for (int i = 0; i < playLength; i++) {
+            volumeAdjusted[i] = buffer[skipSamples + i] * GeneralVariables.volumePercent;
         }
 
+        GeneralVariables.fileLog(String.format(
+                "playViaUsbAudio: calling writeAudio playLength=%d rate=%d",
+                playLength, GeneralVariables.audioSampleRate));
         boolean success = usbDev.writeAudio(volumeAdjusted, GeneralVariables.audioSampleRate);
-        if (!success) {
-            Log.e(TAG, "USB audio write failed");
-        }
+        GeneralVariables.fileLog(
+                "playViaUsbAudio: writeAudio returned " + (success ? "OK" : "FAILED"));
 
         usbDev.close();
         afterPlayAudio();
@@ -621,6 +684,7 @@ public class FT8TransmitSignal {
             GeneralVariables.addQSLCallsign(toCallsign.callsign);// add successfully contacted callsign to the list
             ToastMessage.show(String.format("QSO : %s , at %s", toCallsign.callsign
                     , BaseRigOperation.getFrequencyAllInfo(GeneralVariables.band)));
+            mutableQsoCompletedAt.postValue(messageEndTime);// signal UI celebration
         }
 
     }
@@ -793,6 +857,14 @@ public class FT8TransmitSignal {
             //if ((msg.getCallsignTo().equals(GeneralVariables.myCallsign)
             if ((GeneralVariables.checkIsMyCallsign(msg.getCallsignTo())
                     && !GeneralVariables.checkFun5(msg.extraInfo))) {// CQ me, not 73
+
+                // Guard: if we're in an active QSO (not CQ), queue the caller instead of switching
+                if (functionOrder != 6 && toCallsign != null && toCallsign.haveTargetCallsign()
+                        && !msg.getCallsignFrom().equals(toCallsign.callsign)) {
+                    enqueueCaller(msg);
+                    continue;
+                }
+
                 // before setting transmit, determine message sequence to avoid starting from the beginning
                 setTransmit(new TransmitCallsign(msg.i3, msg.n3, msg.getCallsignFrom(), msg.freq_hz
                                 , msg.getSequence(), msg.snr)
@@ -937,8 +1009,10 @@ public class FT8TransmitSignal {
             // enter CQ state
             resetToCQ();
 
-            // check if any messages are calling me, or if watched callsigns are CQing
-            checkCQMeOrFollowCQMessage(messages);
+            // try queued callers first, then check for new callers
+            if (!dequeueNextCaller()) {
+                checkCQMeOrFollowCQMessage(messages);
+            }
             setCurrentFunctionOrder(functionOrder);// set current message
             mutableFunctionOrder.postValue(functionOrder);
             return;
@@ -962,7 +1036,7 @@ public class FT8TransmitSignal {
 
         // at this point I am not yet in message 6 state; check if anyone is calling me
         // 2022-09-22 if someone is calling me or auto-follow is active, set up a new transmit message list
-        if (checkCQMeOrFollowCQMessage(messages)) {
+        if (!pendingUserCQ && checkCQMeOrFollowCQMessage(messages)) {
             return;
         }
 
@@ -970,7 +1044,11 @@ public class FT8TransmitSignal {
         // at this point, no reply messages were received
         // if I am in CQ state, newOrder must be -1
         if (functionOrder == 6) {// I am in CQ state
-            checkCQMeOrFollowCQMessage(messages);
+            if (pendingUserCQ) {
+                pendingUserCQ = false;
+            } else if (!dequeueNextCaller()) {
+                checkCQMeOrFollowCQMessage(messages);
+            }
             return;
         }
 
@@ -981,10 +1059,12 @@ public class FT8TransmitSignal {
         }
         // if no-reply limit exceeded, reset to CQ state
         if ((GeneralVariables.noReplyCount > GeneralVariables.noReplyLimit) && (GeneralVariables.noReplyLimit > 0)) {
-            // check watched message list; if no new CQ, enter CQ state; if found, switch to calling the new target
-            if (!getNewTargetCallsign(messages)) {//check CQ messages in watch list; returns true if a new target is found
-                functionOrder = 6;
-                toCallsign.callsign = "CQ";
+            // try queued callers first, then check watched messages, then fall back to CQ
+            if (!dequeueNextCaller()) {
+                if (!getNewTargetCallsign(messages)) {//check CQ messages in watch list; returns true if a new target is found
+                    functionOrder = 6;
+                    toCallsign.callsign = "CQ";
+                }
             }
             generateFun();
             setCurrentFunctionOrder(functionOrder);// set current message
@@ -1026,6 +1106,14 @@ public class FT8TransmitSignal {
         return false;
     }
 
+    /**
+     * Get the target callsign string for UI display.
+     * @return callsign string or null if no target
+     */
+    public String getToCallsignString() {
+        return toCallsign != null ? toCallsign.callsign : null;
+    }
+
     public boolean isSynFrequency() {
         return GeneralVariables.synFrequency;
     }
@@ -1039,6 +1127,7 @@ public class FT8TransmitSignal {
         this.activated = activated;
         if (!this.activated) {//force stop transmitting
             setTransmitting(false);
+            clearCallerQueue();
         }
         mutableIsActivated.postValue(activated);
     }
@@ -1076,6 +1165,7 @@ public class FT8TransmitSignal {
         if (GeneralVariables.myCallsign.length() < 3) {
             return;
         }
+        clearCallerQueue();
         //must determine my callsign type to set i3n3 !!!
         int i3 = GenerateFT8.checkI3ByCallsign(GeneralVariables.myCallsign);
         setTransmit(new TransmitCallsign(i3, 0, "CQ", UtcTimer.getNowSequential())
@@ -1100,7 +1190,7 @@ public class FT8TransmitSignal {
         if (toCallsign == null) {
             //must determine my callsign type to set i3n3 !!!
             int i3 = GenerateFT8.checkI3ByCallsign(GeneralVariables.myCallsign);
-            setTransmit(new TransmitCallsign(i3, 0, "CQ", (UtcTimer.getNowSequential() + 1) % 2)
+            setTransmit(new TransmitCallsign(i3, 0, "CQ", sequential)
                     , 6, "");
         } else {
             functionOrder = 6;
@@ -1109,6 +1199,89 @@ public class FT8TransmitSignal {
             generateFun();
         }
     }
+
+    /**
+     * Called when the user explicitly presses CQ. Clears the caller queue and
+     * sets a flag so that the first decode cycle after pressing CQ will not
+     * auto-follow or dequeue — the CQ message transmits cleanly first.
+     */
+    public void userResetToCQ() {
+        resetToCQ();
+        clearCallerQueue();
+        pendingUserCQ = true;
+    }
+
+    // ==================== Caller Queue Methods ====================
+
+    /**
+     * Add a caller to the queue. Deduplicates by callsign (updates SNR/freq if already present).
+     * Skips callers that are excluded, already QSL'd, or our own callsign.
+     */
+    public void enqueueCaller(Ft8Message msg) {
+        String callsign = msg.getCallsignFrom();
+        if (callsign == null || callsign.isEmpty()) return;
+        if (GeneralVariables.checkIsMyCallsign(callsign)) return;
+        if (GeneralVariables.checkIsExcludeCallsign(callsign)) return;
+        if (GeneralVariables.checkQSLCallsign(callsign)) return;
+
+        synchronized (callerQueue) {
+            // Update existing entry if callsign already queued
+            for (int i = 0; i < callerQueue.size(); i++) {
+                if (callerQueue.get(i).callsign.equals(callsign)) {
+                    QueuedCaller existing = callerQueue.get(i);
+                    existing.snr = msg.snr;
+                    existing.queuedTimeMs = System.currentTimeMillis();
+                    mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+                    return;
+                }
+            }
+            // Add new entry if not at capacity
+            if (callerQueue.size() < MAX_QUEUE_SIZE) {
+                callerQueue.add(new QueuedCaller(
+                        callsign, msg.freq_hz, msg.getSequence(), msg.snr,
+                        msg.i3, msg.n3, msg.extraInfo));
+                mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+            }
+        }
+    }
+
+    /**
+     * Dequeue the next caller and start a QSO with them via setTransmit().
+     * Skips stale or excluded callers. Returns true if a caller was started.
+     */
+    public boolean dequeueNextCaller() {
+        synchronized (callerQueue) {
+            while (!callerQueue.isEmpty()) {
+                QueuedCaller caller = callerQueue.remove(0);
+                mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+
+                // Skip if caller is now excluded or already worked
+                if (GeneralVariables.checkIsExcludeCallsign(caller.callsign)) continue;
+                if (GeneralVariables.checkQSLCallsign(caller.callsign)) continue;
+
+                // Start QSO with this caller
+                resetTargetReport();
+                setTransmit(new TransmitCallsign(caller.i3, caller.n3, caller.callsign,
+                                caller.frequency, caller.sequential, caller.snr),
+                        GeneralVariables.checkFunOrderByExtraInfo(caller.extraInfo) + 1,
+                        caller.extraInfo);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Clear the entire caller queue.
+     */
+    public void clearCallerQueue() {
+        synchronized (callerQueue) {
+            callerQueue.clear();
+            mutableCallerQueue.postValue(new ArrayList<>(callerQueue));
+        }
+    }
+
+    // ==================== End Caller Queue Methods ====================
 
     /**
      * Set transmit time delay; this delay also provides decoding time for the previous cycle.
@@ -1206,6 +1379,34 @@ public class FT8TransmitSignal {
                 Thread.sleep(GeneralVariables.pttDelay);// response time after PTT command, default 100ms
             } catch (InterruptedException e) {
                 e.printStackTrace();
+            }
+
+            // Compute how late we are *vs. when FT8 audio should start*, and only
+            // clip leading audio if we'd overrun the 15-second cycle otherwise.
+            //
+            // FT8 = 79 GFSK symbols at 0.16s each = 12.64s of audio. The spec
+            // expects audio to start ~+0.5s into each 15s cycle, so any start
+            // between 0 and (15.00 - 12.64) = 2.36s into the cycle fits without
+            // clipping. The original `msLate = position % 15000` treated every
+            // millisecond past the cycle boundary as lateness — so a normal
+            // on-time TX that fires ~500-800ms into the cycle (totally fine)
+            // would chop 500-800ms off the *start* of the audio buffer, which
+            // is exactly where the leading Costas sync array lives (symbols
+            // 0-6, the first 1.12s). Receivers couldn't lock, and the signal
+            // came across as audible-but-undecodable.
+            //
+            // New behavior: skip only the excess past 2.36s. On-time and
+            // mildly-late TXs send the full waveform; only genuinely late
+            // starts (over ~2.4s into cycle) start clipping leading audio.
+            int msIntoCycle = (int) (UtcTimer.getSystemTime() % 15000);
+            int msMaxStart = 15000 - 12640; // 2360ms — last moment we can start without overrunning
+            int msLate = msIntoCycle - msMaxStart;
+            if (msLate < 0) msLate = 0;
+            if (msLate >= 15000) msLate = 14999;
+            transmitSignal.lateStartSkipMs = msLate;
+            if (msLate > 100) {
+                Log.d(TAG, String.format("Late start: skipping %d ms of leading audio", msLate));
+                ToastMessage.show(String.format("Late start: −%d ms", msLate));
             }
 
 //            if (transmitSignal.onDoTransmitted != null) {//process audio data for ICOM network mode transmission

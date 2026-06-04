@@ -3,39 +3,64 @@ package radio.ks3ckc.ft8us
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import android.os.Handler
+import android.os.Looper
+import androidx.lifecycle.Observer
 import com.bg7yoz.ft8cn.GeneralVariables
 import com.bg7yoz.ft8cn.MainViewModel
 import com.bg7yoz.ft8cn.bluetooth.BluetoothStateBroadcastReceive
+import com.bg7yoz.ft8cn.connector.CableSerialPort
+import com.bg7yoz.ft8cn.connector.ConnectMode
 import com.bg7yoz.ft8cn.callsign.CallsignDatabase
 import com.bg7yoz.ft8cn.database.DatabaseOpr
 import com.bg7yoz.ft8cn.database.OnAfterQueryConfig
 import com.bg7yoz.ft8cn.database.OperationBand
+import com.bg7yoz.ft8cn.location.GridLocationUpdater
 import com.bg7yoz.ft8cn.log.ImportSharedLogs
+import com.bg7yoz.ft8cn.wave.UsbAudioNative
 import com.bg7yoz.ft8cn.log.OnShareLogEvents
 import com.bg7yoz.ft8cn.maidenhead.MaidenheadGrid
 import com.bg7yoz.ft8cn.ui.ToastMessage
 import radio.ks3ckc.ft8us.theme.FT8USTheme
+import radio.ks3ckc.ft8us.ui.components.ExitConfirmDialog
+import java.io.File
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class ComposeMainActivity : ComponentActivity() {
 
     private var bluetoothReceiver: BluetoothStateBroadcastReceive? = null
+    private var usbDetachReceiver: BroadcastReceiver? = null
     private lateinit var mainViewModel: MainViewModel
+    private val showExitConfirm: MutableState<Boolean> = mutableStateOf(false)
 
     companion object {
         private const val TAG = "ComposeMainActivity"
@@ -61,20 +86,27 @@ class ComposeMainActivity : ComponentActivity() {
         mainViewModel = MainViewModel.getInstance(this)
         ToastMessage.getInstance()
 
-        // Register back press handler for exit confirmation
+        // Register back press handler. Priority: dismiss the QSO sheet if
+        // it's open, otherwise show exit confirm. Without this, back-from-
+        // sheet tries to exit the whole app, which surprises users who
+        // expect back to peel off the foreground overlay first.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                android.app.AlertDialog.Builder(this@ComposeMainActivity)
-                    .setMessage(getString(com.bg7yoz.ft8cn.R.string.exit_confirmation))
-                    .setPositiveButton(getString(com.bg7yoz.ft8cn.R.string.exit)) { _, _ ->
-                        mainViewModel.ft8TransmitSignal.isActivated = false
-                        closeApp()
+                val sheetCs = mainViewModel.qsoSheetCallsign.value
+                val sheetMinimized = mainViewModel.qsoSheetMinimized.value == true
+                if (sheetCs != null && !sheetMinimized) {
+                    // Mirror DecodeScreen.onDismiss: minimize when a QSO is
+                    // live so the panel header stays reopenable; fully clear
+                    // otherwise.
+                    if (mainViewModel.ft8TransmitSignal.isActivated) {
+                        mainViewModel.qsoSheetMinimized.postValue(true)
+                    } else {
+                        mainViewModel.qsoSheetCallsign.postValue(null)
+                        mainViewModel.qsoSheetMinimized.postValue(false)
                     }
-                    .setNegativeButton(getString(com.bg7yoz.ft8cn.R.string.cancel)) { dialog, _ ->
-                        dialog.dismiss()
-                    }
-                    .create()
-                    .show()
+                    return
+                }
+                showExitConfirm.value = true
             }
         })
 
@@ -84,18 +116,65 @@ class ComposeMainActivity : ComponentActivity() {
             mainViewModel.setBlueToothOn()
         }
 
-        // Set Compose UI
+        // Register USB detach receiver — without this, a cable yank leaves the
+        // recorder waiting on a dead handle and TX still pointing at a closed
+        // UsbDeviceConnection. We tear down those handles here so the next
+        // ATTACH event can rebind cleanly.
+        registerUsbDetachReceiver()
+
+        // Set Compose UI — splash plays once per cold start, then crossfades into the app.
         setContent {
             FT8USTheme {
-                FT8USApp(mainViewModel)
+                var showSplash by remember { mutableStateOf(true) }
+                Crossfade(
+                    targetState = showSplash,
+                    animationSpec = tween(durationMillis = 360),
+                    label = "splash-crossfade",
+                ) { isSplash ->
+                    if (isSplash) {
+                        radio.ks3ckc.ft8us.ui.splash.FT8USplashScreen(
+                            onSplashComplete = { showSplash = false }
+                        )
+                    } else {
+                        FT8USApp(mainViewModel)
+                    }
+                }
+
+                ExitConfirmDialog(
+                    visible = showExitConfirm.value,
+                    onCancel = { showExitConfirm.value = false },
+                    onConfirm = {
+                        showExitConfirm.value = false
+                        mainViewModel.ft8TransmitSignal.isActivated = false
+                        closeApp()
+                    },
+                )
             }
         }
 
         // Initialize data
+        fileLog("=== APP START ===")
+        // Phase-1 native-library sanity log. Confirms libft8af_usb.so loaded
+        // and JNI is reachable; Phase 2 will replace the sentinel with the
+        // libusb version + capabilities string.
+        if (UsbAudioNative.isAvailable()) {
+            try {
+                fileLog("UsbAudioNative: " + UsbAudioNative.nativeBuildString())
+            } catch (e: Throwable) {
+                fileLog("UsbAudioNative: call threw ${e.javaClass.simpleName}: ${e.message}")
+            }
+        } else {
+            fileLog("UsbAudioNative: library NOT loaded")
+        }
         initData()
 
-        // List USB devices
-        mainViewModel.getUsbDevice()
+        // Observe serial port changes for auto-connect (mirrors old MainActivity behavior)
+        mainViewModel.mutableSerialPorts.observe(
+            this,
+            Observer { ports ->
+                autoConnectUsbIfNeeded(ports)
+            },
+        )
 
         // Handle shared file import if needed
         if (mainViewModel.mutableImportShareRunning.value == true) {
@@ -154,12 +233,38 @@ class ComposeMainActivity : ComponentActivity() {
 
             override fun doOnAfterQueryConfig(keyName: String?, value: String?) {
                 mainViewModel.configIsLoaded = true
-                val grid = MaidenheadGrid.getMyMaidenheadGrid(applicationContext)
-                if (grid.isNotEmpty()) {
-                    GeneralVariables.setMyMaidenheadGrid(grid)
-                    mainViewModel.databaseOpr.writeConfig("grid", grid, null)
+                fileLog("configLoaded: instructionSet=${GeneralVariables.instructionSet}, " +
+                    "baudRate=${GeneralVariables.baudRate}, " +
+                    "controlMode=${GeneralVariables.controlMode}, " +
+                    "connectMode=${GeneralVariables.connectMode}")
+                if (GeneralVariables.autoUpdateGridFromGPS) {
+                    val grid = MaidenheadGrid.getMyMaidenheadGrid(applicationContext)
+                    if (grid.isNotEmpty()) {
+                        GeneralVariables.setMyMaidenheadGrid(grid)
+                        mainViewModel.databaseOpr.writeConfig("grid", grid, null)
+                    }
+                    GridLocationUpdater.refresh(applicationContext, mainViewModel)
                 }
                 mainViewModel.ft8TransmitSignal.setTimer_sec(GeneralVariables.transmitDelay)
+
+                // Scan for USB devices AFTER config is loaded
+                fileLog("initData: scanning USB devices")
+                mainViewModel.getUsbDevice()
+                val ports = mainViewModel.mutableSerialPorts.value
+                fileLog("initData: found ${ports?.size ?: 0} serial port(s)")
+                mainViewModel.reinitializeAudioInput()
+
+                // Delayed re-scan for slow USB enumeration
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val connected = mainViewModel.isRigConnected()
+                    fileLog("initData delayed: rigConnected=$connected")
+                    if (!connected) {
+                        mainViewModel.getUsbDevice()
+                        val delayedPorts = mainViewModel.mutableSerialPorts.value
+                        fileLog("initData delayed: found ${delayedPorts?.size ?: 0} serial port(s)")
+                    }
+                    mainViewModel.reinitializeAudioInput()
+                }, 3000)
             }
         })
 
@@ -226,7 +331,23 @@ class ComposeMainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if ("android.hardware.usb.action.USB_DEVICE_ATTACHED" == intent.action) {
+            fileLog("onNewIntent: USB_DEVICE_ATTACHED")
+            // Immediate scan
             mainViewModel.getUsbDevice()
+            val ports = mainViewModel.mutableSerialPorts.value
+            fileLog("onNewIntent: immediate scan found ${ports?.size ?: 0} port(s)")
+
+            // Delayed re-scan and audio reinit (USB needs time to enumerate)
+            Handler(Looper.getMainLooper()).postDelayed({
+                val connected = mainViewModel.isRigConnected()
+                fileLog("onNewIntent delayed: rigConnected=$connected")
+                if (!connected) {
+                    mainViewModel.getUsbDevice()
+                    val delayedPorts = mainViewModel.mutableSerialPorts.value
+                    fileLog("onNewIntent delayed: re-scan found ${delayedPorts?.size ?: 0} port(s)")
+                }
+                mainViewModel.reinitializeAudioInput()
+            }, 2000)
         } else {
             setIntent(intent)
             doReceiveShareFile(intent)
@@ -259,9 +380,118 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    private fun registerUsbDetachReceiver() {
+        if (usbDetachReceiver != null) return
+        usbDetachReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                fileLog("usbDetach: vid=${device?.vendorId?.toString(16)} " +
+                    "pid=${device?.productId?.toString(16)}")
+                // Drop the recorder's USB audio handle. reinitialize() handles
+                // both "device gone -> fall back to built-in mic" and
+                // "device returned -> reopen". Idempotent and safe to call.
+                try {
+                    mainViewModel.reinitializeAudioInput()
+                } catch (e: Exception) {
+                    fileLog("usbDetach: reinitializeAudioInput threw: ${e.message}")
+                }
+            }
+        }
+        val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbDetachReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbDetachReceiver, filter)
+        }
+    }
+
+    private fun unregisterUsbDetachReceiver() {
+        usbDetachReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+            usbDetachReceiver = null
+        }
+    }
+
     override fun onDestroy() {
         unregisterBluetoothReceiver()
+        unregisterUsbDetachReceiver()
         super.onDestroy()
+    }
+
+    /**
+     * Auto-connect to USB serial rig when ports are detected, rig isn't already connected,
+     * and connect mode is USB Cable with a non-VOX control mode.
+     * Connects to the first detected port (most radios expose CAT as the first port).
+     */
+    private fun autoConnectUsbIfNeeded(ports: ArrayList<CableSerialPort.SerialPort>?) {
+        if (ports.isNullOrEmpty()) {
+            fileLog("autoConnect: no serial ports detected")
+            return
+        }
+        if (mainViewModel.isRigConnected()) {
+            fileLog("autoConnect: rig already connected, skipping")
+            return
+        }
+        if (GeneralVariables.connectMode != ConnectMode.USB_CABLE) {
+            fileLog("autoConnect: connectMode=${GeneralVariables.connectMode}, not USB_CABLE")
+            return
+        }
+        if (!mainViewModel.configIsLoaded) {
+            fileLog("autoConnect: config not loaded yet, skipping")
+            return
+        }
+
+        fileLog("autoConnect: connecting to port 0 of ${ports.size} " +
+            "(instructionSet=${GeneralVariables.instructionSet}, " +
+            "baudRate=${GeneralVariables.baudRate}, " +
+            "controlMode=${GeneralVariables.controlMode})")
+        mainViewModel.connectCableRig(applicationContext, ports[0])
+    }
+
+    /** Write a line to /sdcard/Android/data/com.bg7yoz.ft8cn/files/debug.log */
+    private fun fileLog(msg: String) {
+        try {
+            val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+            val dir = getExternalFilesDir(null) ?: return
+            File(dir, "debug.log").appendText("$ts $msg\n")
+        } catch (_: Exception) {}
+        Log.d(TAG, msg)
+    }
+
+    private var volumeToast: android.widget.Toast? = null
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                val delta = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 0.05f else -0.05f
+                val newVol = (GeneralVariables.volumePercent + delta).coerceIn(0.0f, 1.0f)
+                GeneralVariables.volumePercent = newVol
+                GeneralVariables.mutableVolumePercent.postValue(newVol)
+                val intVal = (newVol * 100).toInt()
+                mainViewModel.databaseOpr.writeConfig("volumeValue", intVal.toString(), null)
+                mainViewModel.baseRig?.connector?.setRFVolume(intVal)
+
+                // Also adjust system music stream so audio is actually audible
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val systemVol = (newVol * maxVol).toInt().coerceIn(0, maxVol)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, systemVol, 0)
+
+                // Show volume toast
+                volumeToast?.cancel()
+                volumeToast = android.widget.Toast.makeText(this, "TX Volume: $intVal%", android.widget.Toast.LENGTH_SHORT)
+                volumeToast?.show()
+
+                return true
+            }
+            else -> return super.onKeyDown(keyCode, event)
+        }
     }
 
     private fun closeApp() {

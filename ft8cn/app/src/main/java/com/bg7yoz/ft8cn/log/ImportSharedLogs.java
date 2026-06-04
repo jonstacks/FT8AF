@@ -4,13 +4,21 @@ import com.bg7yoz.ft8cn.GeneralVariables;
 import com.bg7yoz.ft8cn.MainViewModel;
 import com.bg7yoz.ft8cn.R;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 
 public class ImportSharedLogs {
     private static final String TAG = "ImportSharedLogs";
+    // Cap shared file size so a hostile (or just oversized) .adi opened via the VIEW intent
+    // cannot OOM the app. 50 MB comfortably fits a real-world lifetime ADIF log.
+    private static final int MAX_IMPORT_BYTES = 50 * 1024 * 1024;
+    // Reject individual ADIF field lengths above this to avoid pathological allocations in
+    // substring() when a record claims a multi-megabyte field.
+    private static final int MAX_ADIF_FIELD_LEN = 64 * 1024;
     //private final Uri uri;
     private String fileContext;
     private final MainViewModel mainViewModel;
@@ -22,26 +30,37 @@ public class ImportSharedLogs {
     }
 
     private boolean loadData(OnShareLogEvents onShareLogEvents) {
-        if (logFileStream != null) {
-            byte[] bytes = new byte[0];
-            try {
-                bytes = new byte[logFileStream.available()];
-                logFileStream.read(bytes);
-                fileContext = new String(bytes);
-            } catch (IOException e) {
-                if (onShareLogEvents != null) {
-                    onShareLogEvents.onShareFailed(String.format(
-                            GeneralVariables.getStringFromResource(R.string.import_share_failed)
-                            , e.getMessage()));
-                }
-                return false;
-            }
-            return true;
-
-        } else {
+        if (logFileStream == null) {
             fileContext = "";
             return false;
         }
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int total = 0;
+        try {
+            int n;
+            while ((n = logFileStream.read(chunk)) > 0) {
+                total += n;
+                if (total > MAX_IMPORT_BYTES) {
+                    if (onShareLogEvents != null) {
+                        onShareLogEvents.onShareFailed(String.format(
+                                GeneralVariables.getStringFromResource(R.string.import_share_failed)
+                                , "file exceeds " + (MAX_IMPORT_BYTES / (1024 * 1024)) + " MB limit"));
+                    }
+                    return false;
+                }
+                buffer.write(chunk, 0, n);
+            }
+            fileContext = buffer.toString(StandardCharsets.UTF_8.name());
+        } catch (IOException e) {
+            if (onShareLogEvents != null) {
+                onShareLogEvents.onShareFailed(String.format(
+                        GeneralVariables.getStringFromResource(R.string.import_share_failed)
+                        , e.getMessage()));
+            }
+            return false;
+        }
+        return true;
     }
 
     public String getLogBody() {
@@ -82,6 +101,9 @@ public class ImportSharedLogs {
                                 if (ttt.length > 1) {
                                     String name = ttt[0];//Field name
                                     int valueLen = Integer.parseInt(ttt[1]);//Field length
+                                    if (valueLen > MAX_ADIF_FIELD_LEN) {
+                                        continue;//Skip pathological field lengths
+                                    }
                                     if (valueLen > 0) {
                                         if (values[1].length() < valueLen) {
                                             valueLen = values[1].length() - 1;

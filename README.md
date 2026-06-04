@@ -1,62 +1,66 @@
-# FT8CN
-Developed by BG7YOZ and hosted by N0BOY
+# FT8AF
 
-Run FT8 natively on Android
+**FT8 on Android — modernized.**
 
-Check [Releases](https://github.com/N0BOY/FT8CN/releases) to download the latest apk file.
+🌐 **[ft8af.app](https://ft8af.app)**
 
+A fork of [FT8CN](https://github.com/N0BOY/FT8CN) that takes the excellent original and brings it forward: a Jetpack Compose UI, full English localization, dozens of bug fixes, and a pile of new operating features built for real on-the-air use.
+
+Run FT8 natively on your Android phone or tablet, drive your radio over USB CAT, decode the band, and work the world from anywhere.
+
+---
+
+## What's New in FT8AF
+
+### UI & UX
+- **Jetpack Compose UI** with a Material 3 dark theme
+- **Full English localization** (the original was Chinese-only)
+- **Active QSO Monitor** — collapsible panel above the TX strip showing the current contact at a glance
+- **Caller queue** so you stay on target during an active QSO instead of bouncing to whoever's loudest
+- **CQ / Stop toggle** button right on the TX strip
+- **TX1 / TX2 time slot toggle** for picking your transmit period
+- **Configurable spectrum width** and continuous waterfall scrolling
+- **UTC timestamps** drawn on the waterfall at FT8 period boundaries
+- **TX volume control** wired to the hardware volume buttons
+
+### Radio & Audio
+- USB CAT control and USB audio reliability fixes (auto-connect race conditions, multi-port handling, serial control)
+- Rig model, control mode, and audio device pickers in the new Compose Settings
+- FT-891 bandwidth correctly set to 3000 Hz in DATA-USB mode
+- TX marker frequency alignment fixes
+
+### Logging
+- **Cloudlog** configuration dialog and automatic log upload
+- **QRZ** automatic log upload
+
+### Stability
+- 58+ bug fixes across two "bug bash" passes: NPE crashes, resource leaks, threading issues, Android lifecycle bugs, encoding errors, RTL support, lint errors for Android 12+
+
+---
+
+## Install
+
+Grab the latest APK from the [Releases](https://github.com/patrickrb/FT8AF/releases) page, or build it yourself:
+
+```bash
+cd ft8cn
+./gradlew installDebug
 ```
-Disclaimer:
-   FT8CN is intended for research purposes, to learn how to decode, transmit, and perform other operations on FT8 signals. We are not responsible for any consequences arising from users' operation of this app.
-   Please comply with local laws and regulations when using FT8CN.
-   Considering the performance and battery life limitations of mobile phones, the signal processing uses lightweight computation without deep decoding or other advanced processing.
-   If you have suggestions or questions, please submit them to the "FAQ" section.
 
-BG7YOZ
-2022-07-01
+---
 
-Tributes:
-   Steve Franke (K9AN), Bill Somerville (G4WJS), Joe Taylor (K1JT) proposed the FT8 and FT4 protocols (FT stands for the initials of Franke and Taylor) and detailed the design philosophy and specific implementation in WSJT-X in their paper "The FT4 and FT8 Communication Protocols," which became the fundamental guide for completing this app.
-   Karlis Goba (YL3JG) provided reference implementations in code.
-Acknowledgments:
-   BG7YOY, provided guidance on basic radio theory during the FT8CN development phase and designed the icon for FT8CN
-   BG4IGX, provided guidance on practical operations when I was just getting started with amateur radio. You can find many of his tutorial videos on Douyin (TikTok China)
-   BD7MXN, helped test connection control for some radios and offered improvement suggestions
-   BH2RSJ, helped establish an FT8CN testing group and provided many valuable suggestions for testing and subsequent improvements
-   BH7ACO, helped resolve driver and related configuration parameters for a radio
-   BG7IKK, helped test radios that only support PTT transmission control via RTS
-   BI1NIZ, helped register an account used for collecting problem feedback and FAQ features
-   BD3OOX and the Shijiazhuang Amateur Radio Club, the callsign regional attribution data for FT8CN was extracted from the JTDX Shijiazhuang edition, enabling callsign location accuracy down to the provincial level in China
-   VR2UPU (BD7MJO), provided guidance on FT8 development and usage experience, and helped with multilingual support
-   BA2BI, provided help and guidance on amateur radio fundamentals and QSO log processing
-   BI3QXJ, provided professional guidance on the command set for a brand series of radios
-   BG6TQD, helped with command set testing for a radio model
-   BG5CSS, provided a radio model for testing
-   BG7YXN, provided a radio model for testing
-   BG7YRB, provided help with callsign rule calculations
-   BG8KAH, provided equipment for testing
-   BA7LVG, JE6WUD, completed Japanese translation and proofreading
-   BG6RI, helped resolve signal report issues in logs
-   SV1EEX, completed Greek and Spanish UI translations
-   VR2VRC, helped correct historical callsign reading rules
-   BA7NQ, provided equipment for testing
-   BD7MYM, provided guidance on testing a radio model
-   N0BOY, helped provide the GitHub repository and translation work
-   BG5JNT, helped correct non-standard callsign identification issues
-   BH3NEK, assisted with testing a radio model
-   BG2ALB, assisted with testing a radio model
-   BG6DRU, assisted with testing a radio model
-   BG7NQF, provided hidden commands for a radio model and performed compatibility testing on some devices
-   BH2VSQ, assisted with testing a radio model
-   BG7YBW, assisted with testing some features
-   BH1RNN, assisted with testing some features
-   BG7BSM, assisted with debugging some bugs
-   BH4FTI, discovered and assisted with debugging some bugs
-   BG8BXM (Brother M), promoted the use of FT8CN; many of his tutorial videos can be found on Douyin (TikTok China) and Bilibili
-   BA7MFQ, promoted the use of FT8CN and helped with testing
-   BG2EFX, provided large-volume log data for testing
-   DS1UFX, contributed (tr)uSDX audio over CAT code
-   BG8HT, provided a radio model for testing
-   UB6LUM, helped resolve operating mode settings for a radio model
-   BG5VLI, contributed code for automatic log upload to Cloudlog and QRZ
-```
+## Thanks
+
+Massive thanks to **BG7YOZ**, the original author of FT8CN, and **N0BOY**, who hosts the original repository and did the early translation work. None of this exists without their work — this fork stands entirely on their shoulders.
+
+---
+
+## About this fork
+
+Most of the changes in FT8AF were vibe coded on I-70 at 70 mph on the way to and from Hamvention. Laptop on the passenger seat, radio in the back, Claude in the loop. Some of the best debugging happens at highway speed.
+
+Built by:
+- **Patrick Burns — [K1AF](https://www.qrz.com/db/K1AF)**
+- **Reid — [N0RC](https://www.qrz.com/db/N0RC)** (co-pilot, road-trip debugger, all-around enabler)
+
+73.

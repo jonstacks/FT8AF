@@ -22,6 +22,7 @@ import com.bg7yoz.ft8cn.FT8Common;
 import com.bg7yoz.ft8cn.Ft8Message;
 import com.bg7yoz.ft8cn.GeneralVariables;
 import com.bg7yoz.ft8cn.R;
+import com.bg7yoz.ft8cn.connector.ConnectMode;
 import com.bg7yoz.ft8cn.ft8signal.FT8Package;
 import com.bg7yoz.ft8cn.log.OnQueryQSLCallsign;
 import com.bg7yoz.ft8cn.log.OnQueryQSLRecordCallsign;
@@ -53,7 +54,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
     public static synchronized DatabaseOpr getInstance(@Nullable Context context, @Nullable String databaseName) {
         if (instance == null) {
-            instance = new DatabaseOpr(context, databaseName, null, 15);
+            instance = new DatabaseOpr(context, databaseName, null, 18);
         }
         return instance;
     }
@@ -95,6 +96,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         //Create SWL-related tables
         createSWLTables(sqLiteDatabase);
 
+        //Create POTA activation history table
+        createPotaTables(sqLiteDatabase);
+
         //Create indexes
         createIndex(sqLiteDatabase);
 
@@ -119,6 +123,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
         //Create SWL-related tables
         createSWLTables(sqLiteDatabase);
+
+        //Create POTA activation history table
+        createPotaTables(sqLiteDatabase);
 
         //Create indexes
         createIndex(sqLiteDatabase);
@@ -155,13 +162,36 @@ public class DatabaseOpr extends SQLiteOpenHelper {
      * @param sql       column definition SQL
      */
     private void alterTable(SQLiteDatabase db, String tableName, String fieldName, String sql) {
-        Cursor cursor = db.rawQuery("select * from sqlite_master where name=? and sql like ?"
-                , new String[]{tableName, "%" + fieldName + "%"});
-        if (!cursor.moveToNext()) {
+        // Identifiers are interpolated into ALTER TABLE and PRAGMA because SQLite cannot bind them;
+        // restrict to simple SQL identifiers so a stray caller can never inject statements.
+        if (!SQL_IDENTIFIER.matcher(tableName).matches()
+                || !SQL_IDENTIFIER.matcher(fieldName).matches()) {
+            throw new IllegalArgumentException("Invalid SQL identifier");
+        }
+        // Query the live schema. The previous LIKE-on-sqlite_master.sql approach was broken
+        // two ways: sqlite_master.sql freezes the original CREATE TABLE text and never
+        // reflects ALTER TABLE ADD COLUMN, and the unanchored substring match treated
+        // `sig` as already present whenever `my_sig` was in the original CREATE — so the
+        // `sig`/`sig_info` columns were never added on upgraded installs and POTA QSO
+        // inserts crashed with "no column named sig".
+        boolean exists = false;
+        try (Cursor cursor = db.rawQuery(
+                String.format("PRAGMA table_info(%s)", tableName), null)) {
+            int nameIdx = cursor.getColumnIndex("name");
+            while (cursor.moveToNext()) {
+                if (fieldName.equals(cursor.getString(nameIdx))) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if (!exists) {
             db.execSQL(String.format("ALTER TABLE %s ADD COLUMN %s", tableName, sql));
         }
-        cursor.close();
     }
+
+    private static final java.util.regex.Pattern SQL_IDENTIFIER =
+            java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
     /**
      * Check if a table exists
@@ -210,6 +240,23 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     , "isLotW_import INTEGER DEFAULT 0");
             alterTable(sqLiteDatabase, "QSLTable", "isLotW_QSL"
                     , "isLotW_QSL INTEGER DEFAULT 0");
+            // Per-service upload state. 1 = the record has been accepted by the
+            // remote logging service at least once. Existing rows default to 0 so the
+            // catch-up sync button can pick them up.
+            alterTable(sqLiteDatabase, "QSLTable", "synced_cloudlog"
+                    , "synced_cloudlog INTEGER DEFAULT 0");
+            alterTable(sqLiteDatabase, "QSLTable", "synced_qrz"
+                    , "synced_qrz INTEGER DEFAULT 0");
+            // POTA ADIF fields. MY_SIG/MY_SIG_INFO are the activator's program/park ref;
+            // SIG/SIG_INFO are the worked station's. Empty for non-POTA contacts.
+            alterTable(sqLiteDatabase, "QSLTable", "my_sig"
+                    , "my_sig TEXT");
+            alterTable(sqLiteDatabase, "QSLTable", "my_sig_info"
+                    , "my_sig_info TEXT");
+            alterTable(sqLiteDatabase, "QSLTable", "sig"
+                    , "sig TEXT");
+            alterTable(sqLiteDatabase, "QSLTable", "sig_info"
+                    , "sig_info TEXT");
 
         } else {
             sqLiteDatabase.execSQL("CREATE TABLE QSLTable (\n" +
@@ -217,6 +264,8 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     "isQSL INTEGER DEFAULT 0,\n" +//Whether QSL is confirmed
                     "isLotW_import INTEGER DEFAULT 0,\n" +//Whether it's a LoTW import
                     "isLotW_QSL INTEGER DEFAULT 0,\n" +
+                    "synced_cloudlog INTEGER DEFAULT 0,\n" +//Uploaded to Cloudlog/Wavelog/Nextlog
+                    "synced_qrz INTEGER DEFAULT 0,\n" +//Uploaded to QRZ
 
 
                     "call TEXT,\n" +
@@ -232,7 +281,11 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     "freq TEXT,\n" +
                     "station_callsign TEXT,\n" +
                     "my_gridsquare TEXT,\n" +
-                    "comment TEXT)");
+                    "comment TEXT,\n" +
+                    "my_sig TEXT,\n" +//POTA: activator's program ("POTA")
+                    "my_sig_info TEXT,\n" +//POTA: activator's park ref
+                    "sig TEXT,\n" +//POTA: worked station's program
+                    "sig_info TEXT)");//POTA: worked station's park ref
         }
 
 
@@ -412,6 +465,23 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         }
     }
 
+
+    /**
+     * Create POTA activation history table. Each row is one activation session
+     * (start to end) so users can re-export a single activation's ADIF later.
+     */
+    private void createPotaTables(SQLiteDatabase sqLiteDatabase) {
+        if (!checkTableExists(sqLiteDatabase, "pota_activation")) {
+            sqLiteDatabase.execSQL("CREATE TABLE pota_activation (\n" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
+                    "park_ref TEXT NOT NULL,\n" +
+                    "operator TEXT,\n" +
+                    "started_at INTEGER NOT NULL,\n" +//epoch millis
+                    "ended_at INTEGER,\n" +//null while in progress
+                    "qso_count INTEGER DEFAULT 0,\n" +
+                    "notes TEXT)");
+        }
+    }
 
     /**
      * Create indexes to improve import speed
@@ -734,6 +804,24 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         new SetQSLTableIsQSL(db, id, isQSL).execute();
     }
 
+    /**
+     * Update an existing QSL record by id with the supplied column values.
+     * Runs on a background thread; SQLite handles concurrent reads.
+     */
+    public void updateQSLRecord(final int id, final android.content.ContentValues values) {
+        if (values == null || values.size() == 0) return;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    db.update("QSLTable", values, "id=?", new String[]{String.valueOf(id)});
+                } catch (Exception e) {
+                    Log.e(TAG, "updateQSLRecord failed: " + e.getMessage());
+                }
+            }
+        }).start();
+    }
+
     public void setQSLCallsignIsQSL(boolean isQSL, int id) {
         new SetQSLCallsignIsQSL(db, id, isQSL).execute();
     }
@@ -904,7 +992,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
     public String downQSLTable(Cursor cursor, boolean isSWL) {
         StringBuilder logStr = new StringBuilder();
 
-        logStr.append("FT8CN ADIF Export<eoh>\n");
+        logStr.append("FT8AF ADIF Export<eoh>\n");
         cursor.moveToPosition(-1);
         while (cursor.moveToNext()) {
             logStr.append(String.format("<call:%d>%s "
@@ -1005,6 +1093,13 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 }
             }
 
+            // POTA ADIF fields — emitted only when populated so non-POTA rows
+            // remain byte-identical to the prior upload format.
+            appendPotaField(logStr, cursor, "my_sig", "MY_SIG");
+            appendPotaField(logStr, cursor, "my_sig_info", "MY_SIG_INFO");
+            appendPotaField(logStr, cursor, "sig", "SIG");
+            appendPotaField(logStr, cursor, "sig_info", "SIG_INFO");
+
             String comment = cursor.getString(cursor.getColumnIndex("comment"));
 
             //<comment:15>Distance: 99 km <eor>
@@ -1016,6 +1111,15 @@ public class DatabaseOpr extends SQLiteOpenHelper {
 
         cursor.close();
         return logStr.toString();
+    }
+
+    /** Append a POTA ADIF field if the column exists and is non-empty. */
+    private static void appendPotaField(StringBuilder sb, Cursor cursor, String column, String adifName) {
+        int idx = cursor.getColumnIndex(column);
+        if (idx < 0) return;
+        String value = cursor.getString(idx);
+        if (value == null || value.isEmpty()) return;
+        sb.append(String.format("<%s:%d>%s ", adifName, value.length(), value));
     }
 
     /**
@@ -1138,6 +1242,12 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             }
             return false;
         }
+        // POTA: if an activation is running, stamp MY_SIG/MY_SIG_INFO; if the worked
+        // station is currently spotted on pota.app, stamp SIG/SIG_INFO too (P2P case).
+        // No-op when no activation/spot, so non-POTA contacts are unaffected.
+        radio.ks3ckc.ft8us.pota.PotaSessionManager.stampQso(
+                record,
+                radio.ks3ckc.ft8us.pota.PotaSpotsRepository.parkRefFor(record.getToCallsign()));
 
         String querySQL;
         if (!checkQSLCallsign(record)) {//If record doesn't exist, add it
@@ -1188,7 +1298,7 @@ public class DatabaseOpr extends SQLiteOpenHelper {
         if (!checkIsQSL(record)) {//If log data doesn't exist, add it
             querySQL = "INSERT INTO QSLTable(call, isQSL,isLotW_import,isLotW_QSL,gridsquare, mode, rst_sent, rst_rcvd, qso_date, " +
                     "time_on, qso_date_off, time_off, band, freq, station_callsign, my_gridsquare," +
-                    "comment)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                    "comment,my_sig,my_sig_info,sig,sig_info)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
             db.execSQL(querySQL, new String[]{record.getToCallsign()
                     , String.valueOf(record.isQSL ? 1 : 0)
@@ -1207,7 +1317,17 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                     , BaseRigOperation.getFrequencyFloat(record.getBandFreq())
                     , record.getMyCallsign()
                     , record.getMyMaidenGrid()
-                    , record.getComment()});
+                    , record.getComment()
+                    , record.getMySig()
+                    , record.getMySigInfo()
+                    , record.getSig()
+                    , record.getSigInfo()});
+            // If this QSO was logged during an active POTA activation, bump its qso_count.
+            if (record.getMySigInfo() != null && !record.getMySigInfo().isEmpty()) {
+                db.execSQL("UPDATE pota_activation SET qso_count = qso_count + 1 "
+                        + "WHERE park_ref = ? AND ended_at IS NULL"
+                        , new Object[]{record.getMySigInfo()});
+            }
             if (afterInsertQSLData!=null){
                 afterInsertQSLData.doAfterInsert(false,true);//New QSL
             }
@@ -1857,9 +1977,11 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             if (!showAll){
                 limitStr="limit 100 offset "+offset;
             }
-            String querySQL = "select q.[call] as callsign ,q.gridsquare as grid" +
+            String querySQL = "select max(q.id) as id, q.[call] as callsign ,q.gridsquare as grid" +
                     ",q.band||\"(\"||q.freq||\" MHz)\" as band \n" +
                     ",q.qso_date as last_time ,q.mode ,q.isQSL,q.isLotW_QSL\n" +
+                    ",max(q.synced_cloudlog) as synced_cloudlog\n" +
+                    ",max(q.synced_qrz) as synced_qrz\n" +
                     "from QSLTable q inner join QSLTable q2 ON q.id =q2.id \n" +
                     "where (q.[call] like ?)\n" +
                     filterStr +
@@ -1874,9 +1996,14 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             ArrayList<QSLCallsignRecord> records = new ArrayList<>();
             while (cursor.moveToNext()) {
                 QSLCallsignRecord record = new QSLCallsignRecord();
+                record.id = cursor.getInt(cursor.getColumnIndex("id"));
                 record.setCallsign(cursor.getString(cursor.getColumnIndex("callsign")));
                 record.isQSL = cursor.getInt(cursor.getColumnIndex("isQSL")) == 1;
                 record.isLotW_QSL = cursor.getInt(cursor.getColumnIndex("isLotW_QSL")) == 1;
+                int idxCl = cursor.getColumnIndex("synced_cloudlog");
+                int idxQrz = cursor.getColumnIndex("synced_qrz");
+                record.syncedCloudlog = idxCl >= 0 && cursor.getInt(idxCl) == 1;
+                record.syncedQrz = idxQrz >= 0 && cursor.getInt(idxQrz) == 1;
                 record.setLastTime(cursor.getString(cursor.getColumnIndex("last_time")));
                 record.setMode(cursor.getString(cursor.getColumnIndex("mode")));
                 record.setGrid(cursor.getString(cursor.getColumnIndex("grid")));
@@ -1929,6 +2056,21 @@ public class DatabaseOpr extends SQLiteOpenHelper {
             }
             cursor.close();
             GeneralVariables.QSL_Callsign_list_other_band = other_callsigns;
+
+            // Load distinct 4-char worked grids (any band) into in-memory set
+            querySQL = "select distinct upper(substr(gridsquare,1,4)) as g from QSLTable" +
+                    " where gridsquare is not null and length(gridsquare) >= 4";
+            cursor = db.rawQuery(querySQL, null);
+            java.util.HashSet<String> grids = new java.util.HashSet<>();
+            while (cursor.moveToNext()) {
+                @SuppressLint("Range")
+                String g = cursor.getString(cursor.getColumnIndex("g"));
+                if (g != null && g.length() >= 4) {
+                    grids.add(g);
+                }
+            }
+            cursor.close();
+            GeneralVariables.QSL_Grid_list = grids;
         }
 
     }
@@ -2124,6 +2266,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("ctrMode")) {
                     GeneralVariables.controlMode = result.equals("") ? ControlMode.VOX : Integer.parseInt(result);
                 }
+                if (name.equalsIgnoreCase("connectMode")) {
+                    GeneralVariables.connectMode = result.equals("") ? ConnectMode.USB_CABLE : Integer.parseInt(result);
+                }
                 if (name.equalsIgnoreCase("model")) {//Radio model
                     GeneralVariables.modelNo = result.equals("") ? 0 : Integer.parseInt(result);
                 }
@@ -2143,8 +2288,21 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("autoCallFollow")) {//Auto-call followed stations
                     GeneralVariables.autoCallFollow = (result.equals("") || result.equals("1"));
                 }
+                if (name.equalsIgnoreCase("autoGridFromGPS")) {//Auto-update grid from GPS
+                    GeneralVariables.autoUpdateGridFromGPS = result.equals("1");
+                }
                 if (name.equalsIgnoreCase("pttDelay")) {//PTT delay setting
                     GeneralVariables.pttDelay = result.equals("") ? 100 : Integer.parseInt(result);
+                }
+                if (name.equalsIgnoreCase("lateStartTolerance")) {//Late-start tolerance, ms (0-4000)
+                    try {
+                        int v = result.equals("") ? 2000 : Integer.parseInt(result);
+                        if (v < 0) v = 0;
+                        if (v > 4000) v = 4000;
+                        GeneralVariables.lateStartTolerance = v;
+                    } catch (NumberFormatException nfe) {
+                        GeneralVariables.lateStartTolerance = 2000;
+                    }
                 }
                 if (name.equalsIgnoreCase("icomIp")) {//ICOM IP address
                     GeneralVariables.icomIp = result.equals("") ? "255.255.255.255" : result;
@@ -2203,6 +2361,9 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("deepMode")) {//Deep decode mode
                     GeneralVariables.deepDecodeMode =result.equals("1");
                 }
+                if (name.equalsIgnoreCase("debugModeEnabled")) {//Hidden debug screen unlock
+                    GeneralVariables.debugModeEnabled = result.equals("1");
+                }
                 if (name.equalsIgnoreCase("dataBits")) {//Serial data bits
                     GeneralVariables.serialDataBits =Integer.parseInt(result);
                 }
@@ -2237,12 +2398,24 @@ public class DatabaseOpr extends SQLiteOpenHelper {
                 if (name.equalsIgnoreCase("enablePskReporter")) {
                     GeneralVariables.enablePskReporter = result.equals("1");
                 }
+                if (name.equalsIgnoreCase("qrzXmlUsername")) {
+                    GeneralVariables.qrzXmlUsername = result;
+                }
+                if (name.equalsIgnoreCase("qrzXmlPassword")) {
+                    GeneralVariables.qrzXmlPassword = result;
+                }
+                if (name.equalsIgnoreCase("pskOverlayEnabled")) {
+                    GeneralVariables.pskOverlayEnabled = result.equals("1");
+                }
 
                 if (name.equalsIgnoreCase("swrSwitch")) {
                     GeneralVariables.swr_switch_on = result.equals("1");
                 }
                 if (name.equalsIgnoreCase("alcSwitch")) {
                     GeneralVariables.alc_switch_on = result.equals("1");
+                }
+                if (name.equalsIgnoreCase("spectrumWidth")) {
+                    GeneralVariables.setSpectrumWidth(result.equals("") ? 3500 : Integer.parseInt(result));
                 }
 
             }

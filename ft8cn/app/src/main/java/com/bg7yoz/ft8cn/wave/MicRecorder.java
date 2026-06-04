@@ -35,12 +35,31 @@ public class MicRecorder {
     private volatile boolean isRunning = false;//whether currently in recording state
     private OnDataListener onDataListener;
 
+    // USB-audio death-loop guard. On some hosts (notably car-dash Android
+    // tablets) UsbRequest.requestWait() returns null on first iteration and
+    // onCaptureStopped() fires immediately. Without this, MicRecorder would
+    // reinitialize() in a ~30ms-per-cycle tight loop. We rate-limit the
+    // self-rebind and after MAX_CONSECUTIVE_USB_FAILURES failed cycles give up
+    // on the raw USB path and fall back to AudioRecord+default mic so the app
+    // keeps running (read-only) instead of spinning the USB bus.
+    private long lastReinitMs = 0;
+    private int consecutiveUsbFailures = 0;
+    private volatile boolean usbAudioSawData = false;
+    private static final long MIN_REINIT_INTERVAL_MS = 2000;
+    private static final int MAX_CONSECUTIVE_USB_FAILURES = 3;
+
     public interface OnDataListener{
         void onDataReceived(float[] data,int len);
     }
 
     @SuppressLint("MissingPermission")
     public MicRecorder(){
+        GeneralVariables.fileLog(String.format(
+                "MicRecorder: init audioInputDeviceId=%d usbVidPid=%04X:%04X",
+                GeneralVariables.audioInputDeviceId,
+                GeneralVariables.usbAudioInputVendorId,
+                GeneralVariables.usbAudioInputProductId));
+
         // Check if USB audio input is selected
         if (GeneralVariables.audioInputDeviceId == -1
                 && GeneralVariables.usbAudioInputVendorId != 0) {
@@ -48,10 +67,11 @@ public class MicRecorder {
             if (usbAudioDevice != null) {
                 useUsbAudio = true;
                 UsbAudioDevice.setActiveInputDevice(usbAudioDevice);
-                Log.d(TAG, "Using USB audio input device");
+                GeneralVariables.fileLog("MicRecorder: using USB audio (direct) input");
                 return; // Skip AudioRecord setup
             }
-            Log.w(TAG, "USB audio device not available, falling back to default");
+            GeneralVariables.fileLog(
+                    "MicRecorder: USB audio open FAILED, falling back to AudioRecord");
         }
 
         //calculate minimum buffer size
@@ -64,7 +84,12 @@ public class MicRecorder {
         if (GeneralVariables.audioInputDeviceId > 0) {
             AudioDeviceInfo deviceInfo = findAudioDeviceById(
                     GeneralVariables.audioInputDeviceId, AudioManager.GET_DEVICES_INPUTS);
-            audioRecord.setPreferredDevice(deviceInfo); // null resets to default
+            boolean ok = audioRecord.setPreferredDevice(deviceInfo); // null resets to default
+            GeneralVariables.fileLog(String.format(
+                    "MicRecorder: AudioRecord(DEFAULT) preferredDevice id=%d ok=%b deviceFound=%b",
+                    GeneralVariables.audioInputDeviceId, ok, deviceInfo != null));
+        } else {
+            GeneralVariables.fileLog("MicRecorder: AudioRecord(DEFAULT) using system default mic");
         }
     }
 
@@ -73,42 +98,62 @@ public class MicRecorder {
      */
     private UsbAudioDevice openUsbAudioInput() {
         Context context = GeneralVariables.getMainContext();
-        if (context == null) return null;
+        if (context == null) {
+            GeneralVariables.fileLog("openUsbAudioInput: no main context");
+            return null;
+        }
 
         UsbDevice device = UsbAudioDevice.findDeviceByVidPid(context,
                 GeneralVariables.usbAudioInputVendorId,
                 GeneralVariables.usbAudioInputProductId);
         if (device == null) {
-            Log.w(TAG, String.format("USB audio device not found: %04X:%04X",
+            GeneralVariables.fileLog(String.format(
+                    "openUsbAudioInput: device not found by VID:PID %04X:%04X",
                     GeneralVariables.usbAudioInputVendorId,
                     GeneralVariables.usbAudioInputProductId));
             return null;
         }
+        GeneralVariables.fileLog(String.format(
+                "openUsbAudioInput: found device %04X:%04X name=%s",
+                device.getVendorId(), device.getProductId(),
+                device.getProductName()));
 
         UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
-        if (usbManager == null || !usbManager.hasPermission(device)) {
-            Log.w(TAG, "No USB permission for audio device");
+        if (usbManager == null) {
+            GeneralVariables.fileLog("openUsbAudioInput: UsbManager is null");
+            return null;
+        }
+        if (!usbManager.hasPermission(device)) {
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: NO USB permission for audio device "
+                            + "(grant via unplug/replug or re-select in Settings)");
             return null;
         }
 
         UsbAudioDevice usbDev = new UsbAudioDevice();
         if (!usbDev.open(context, device)) {
-            Log.e(TAG, "Failed to open USB audio device");
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: UsbAudioDevice.open() FAILED "
+                            + "(descriptor parse or claimInterface failed)");
             return null;
         }
 
         if (!usbDev.hasInput()) {
-            Log.e(TAG, "USB audio device has no input endpoint");
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: device has no input endpoint after open");
             usbDev.close();
             return null;
         }
 
         if (!usbDev.activateInput(48000)) {
-            Log.e(TAG, "Failed to activate USB audio input");
+            GeneralVariables.fileLog(
+                    "openUsbAudioInput: activateInput(48000) FAILED "
+                            + "(alt-setting select or endpoint setup failed)");
             usbDev.close();
             return null;
         }
 
+        GeneralVariables.fileLog("openUsbAudioInput: SUCCESS at 48000 Hz");
         return usbDev;
     }
 
@@ -141,12 +186,74 @@ public class MicRecorder {
     }
 
     private void startUsbCapture() {
+        final MicRecorder self = this;
+        usbAudioSawData = false;
         usbAudioDevice.startCapture(sampleRateInHz, new UsbAudioDevice.AudioInputCallback() {
             @Override
             public void onAudioData(float[] data, int length) {
+                if (length > 0 && !usbAudioSawData) {
+                    usbAudioSawData = true;
+                    consecutiveUsbFailures = 0;
+                    GeneralVariables.fileLog(
+                            "startUsbCapture: first audio data received, "
+                                    + "USB stream is live");
+                }
                 if (isRunning && onDataListener != null) {
                     onDataListener.onDataReceived(data, length);
                 }
+            }
+
+            @Override
+            public void onCaptureStopped() {
+                // The USB audio capture loop exited without an explicit stop.
+                // Two distinct cases we need to handle differently:
+                //   1. Genuine device-gone / temporary glitch — rebind once,
+                //      hope the next attempt sticks.
+                //   2. Host can't drive isochronous transfers and requestWait()
+                //      returns null on the first iteration — capture dies in
+                //      ~10ms. Without a guard, reinitialize -> open -> start ->
+                //      die -> reinitialize... spins forever at ~30ms per cycle
+                //      (saw this on a car-dash Android 11 tablet).
+                // Strategy: rate-limit to one reinit per MIN_REINIT_INTERVAL_MS,
+                // and after MAX_CONSECUTIVE_USB_FAILURES cycles without ever
+                // seeing audio data, force-fall-back to AudioRecord. The app
+                // can't transmit through USB then but at least stops thrashing.
+                if (!usbAudioSawData) {
+                    consecutiveUsbFailures++;
+                }
+                long now = System.currentTimeMillis();
+                long sinceLast = now - lastReinitMs;
+                GeneralVariables.fileLog(String.format(
+                        "startUsbCapture: capture STOPPED (sawData=%b "
+                                + "consecFailures=%d sinceLastReinit=%dms)",
+                        usbAudioSawData, consecutiveUsbFailures, sinceLast));
+
+                if (consecutiveUsbFailures >= MAX_CONSECUTIVE_USB_FAILURES
+                        && !usbAudioSawData) {
+                    GeneralVariables.fileLog(
+                            "startUsbCapture: giving up on raw USB after "
+                                    + consecutiveUsbFailures
+                                    + " failures, forcing fallback to AudioRecord");
+                    // Temporarily blank the USB selection so reinitialize()
+                    // takes the AudioRecord branch instead of looping.
+                    GeneralVariables.audioInputDeviceId = 0;
+                    self.reinitialize();
+                    return;
+                }
+
+                if (sinceLast < MIN_REINIT_INTERVAL_MS) {
+                    GeneralVariables.fileLog(
+                            "startUsbCapture: throttling reinit (last was "
+                                    + sinceLast + "ms ago)");
+                    try {
+                        Thread.sleep(MIN_REINIT_INTERVAL_MS - sinceLast);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                lastReinitMs = System.currentTimeMillis();
+                self.reinitialize();
             }
         });
     }
@@ -200,14 +307,6 @@ public class MicRecorder {
         if (useUsbAudio && usbAudioDevice != null) {
             usbAudioDevice.stopCapture();
         }
-        if (audioRecord != null) {
-            try {
-                audioRecord.release();
-            } catch (Exception e) {
-                Log.d(TAG, "Error releasing AudioRecord: " + e.getMessage());
-            }
-            audioRecord = null;
-        }
     }
 
     public OnDataListener getOnDataListener() {
@@ -216,5 +315,75 @@ public class MicRecorder {
 
     public void setOnDataListener(OnDataListener onDataListener) {
         this.onDataListener = onDataListener;
+    }
+
+    /**
+     * Reinitialize the audio input device. Stops current audio capture,
+     * re-checks for USB audio device availability, and restarts if it was running.
+     * This handles the case where a USB audio device is connected after MicRecorder
+     * was originally constructed.
+     */
+    @SuppressLint("MissingPermission")
+    public void reinitialize() {
+        boolean wasRunning = isRunning;
+        OnDataListener savedListener = onDataListener;
+
+        // Stop current capture
+        stopRecord();
+
+        // Release old AudioRecord (stopRecord only sets isRunning=false)
+        if (audioRecord != null) {
+            try {
+                audioRecord.release();
+            } catch (Exception e) {
+                Log.d(TAG, "reinitialize: error releasing AudioRecord: " + e.getMessage());
+            }
+            audioRecord = null;
+        }
+
+        // Close old USB audio device
+        if (usbAudioDevice != null) {
+            try {
+                usbAudioDevice.close();
+            } catch (Exception e) {
+                Log.d(TAG, "reinitialize: error closing USB audio device: " + e.getMessage());
+            }
+        }
+
+        // Reset state
+        useUsbAudio = false;
+        usbAudioDevice = null;
+
+        // Re-check for USB audio input
+        if (GeneralVariables.audioInputDeviceId == -1
+                && GeneralVariables.usbAudioInputVendorId != 0) {
+            usbAudioDevice = openUsbAudioInput();
+            if (usbAudioDevice != null) {
+                useUsbAudio = true;
+                UsbAudioDevice.setActiveInputDevice(usbAudioDevice);
+                Log.d(TAG, "reinitialize: Using USB audio input device");
+            } else {
+                Log.w(TAG, "reinitialize: USB audio device not available, falling back to default");
+            }
+        }
+
+        // Set up standard AudioRecord if not using USB audio
+        if (!useUsbAudio) {
+            bufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
+            audioRecord = new AudioRecord(MediaRecorder.AudioSource.DEFAULT, sampleRateInHz,
+                    channelConfig, audioFormat, bufferSize);
+
+            if (GeneralVariables.audioInputDeviceId > 0) {
+                AudioDeviceInfo deviceInfo = findAudioDeviceById(
+                        GeneralVariables.audioInputDeviceId, AudioManager.GET_DEVICES_INPUTS);
+                audioRecord.setPreferredDevice(deviceInfo);
+            }
+        }
+
+        // Restore listener and restart if it was running
+        onDataListener = savedListener;
+        if (wasRunning) {
+            start();
+        }
     }
 }

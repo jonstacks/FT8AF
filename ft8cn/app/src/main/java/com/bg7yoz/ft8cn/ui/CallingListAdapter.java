@@ -225,6 +225,9 @@ public class CallingListAdapter extends RecyclerView.Adapter<CallingListAdapter.
         // Check if this callsign has been contacted before; store result in holder.otherBandIsQso
         setQueryHolderQSL_Callsign(holder);
 
+        // Worked-before highlighting (left-edge stripe). Depends on isQSL_Callsign/otherBandIsQso set above.
+        setWorkedStateStripe(holder);
+
         // Whether the message is related to my callsign
         if (holder.ft8Message.inMyCall()) {
             holder.callListMessageTextView.setTextColor(context.getResources().getColor(
@@ -328,6 +331,38 @@ public class CallingListAdapter extends RecyclerView.Adapter<CallingListAdapter.
         }
     }
 
+    /**
+     * Color the left-edge stripe of a row based on worked-before state.
+     * Priority: new DXCC > new grid > new band > worked-before > none.
+     */
+    private void setWorkedStateStripe(@NonNull CallingListItemHolder holder) {
+        if (holder.workedStateStripeView == null) return;
+
+        Ft8Message msg = holder.ft8Message;
+        // TX row (synthetic) — no stripe.
+        if (msg == null || msg.freq_hz <= 0.01f) {
+            holder.workedStateStripeView.setBackgroundColor(context.getColor(R.color.stripe_none));
+            return;
+        }
+
+        int colorRes;
+        if (msg.fromDxcc) {
+            colorRes = R.color.stripe_new_dxcc;
+        } else if (msg.maidenGrid != null
+                && msg.maidenGrid.length() >= 4
+                && !GeneralVariables.checkQSLGrid(msg.maidenGrid)) {
+            colorRes = R.color.stripe_new_grid;
+        } else if (!msg.isQSL_Callsign
+                && holder.otherBandIsQso) {
+            colorRes = R.color.stripe_new_band;
+        } else if (msg.isQSL_Callsign) {
+            colorRes = R.color.stripe_worked;
+        } else {
+            colorRes = R.color.stripe_none;
+        }
+        holder.workedStateStripeView.setBackgroundColor(context.getColor(colorRes));
+    }
+
     private void setFromDxcc(@NonNull CallingListItemHolder holder) {
 
         if (holder.ft8Message.fromDxcc && holder.ft8Message.freq_hz > 0.01f) {
@@ -401,6 +436,7 @@ public class CallingListAdapter extends RecyclerView.Adapter<CallingListAdapter.
                 bandItemTextView, callingUtcTextView;
         ImageView dxccToImageView, ituToImageView, cqToImageView, dxccFromImageView
                 , ituFromImageView, cqFromImageView,isWeakSignalImageView;
+        View workedStateStripeView;
         public Ft8Message ft8Message;
         //boolean showFollow;
         ShowMode showMode;
@@ -431,6 +467,7 @@ public class CallingListAdapter extends RecyclerView.Adapter<CallingListAdapter.
             ituFromImageView = itemView.findViewById(R.id.ituFromImageView);
             cqFromImageView = itemView.findViewById(R.id.cqFromImageView);
             isWeakSignalImageView=itemView.findViewById(R.id.isWeakSignalImageView);
+            workedStateStripeView=itemView.findViewById(R.id.workedStateStripeView);
 
             dxccToImageView.setVisibility(View.GONE);
             ituToImageView.setVisibility(View.GONE);

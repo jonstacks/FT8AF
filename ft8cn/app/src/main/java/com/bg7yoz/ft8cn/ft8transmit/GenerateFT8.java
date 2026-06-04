@@ -33,11 +33,22 @@ public class GenerateFT8 {
 
 
     static {
-        System.loadLibrary("ft8cn");
+        try {
+            System.loadLibrary("ft8cn");
+        } catch (UnsatisfiedLinkError e) {
+            // Best-effort load: JVM unit tests don't have libft8cn.so on
+            // java.library.path. The native methods themselves will throw if
+            // actually invoked without the library; the pure-Java helpers on
+            // this class stay available either way.
+            Log.w(TAG, "ft8cn native library not loaded: " + e.getMessage());
+        }
     }
 
 
     public static int checkI3ByCallsign(String callsign) {
+        if (callsign == null || callsign.length() < 2) {
+            return 0;
+        }
         String substring = callsign.substring(callsign.length() - 2);
         if (substring.equals("/P")) {
             if (callsign.length() <= 8) {

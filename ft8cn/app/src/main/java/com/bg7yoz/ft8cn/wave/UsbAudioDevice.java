@@ -43,6 +43,9 @@ public class UsbAudioDevice {
     private int inputSampleRate = 48000;
     private int inputChannels = 1;
     private volatile boolean capturing = false;
+    // Non-zero when the libusb-backed capture session is live; in that case
+    // captureLoop() is bypassed and stopCapture() routes through native.
+    private volatile long nativeCaptureHandle = 0;
 
     // Output (speaker)
     private UsbInterface streamingInterfaceOut;
@@ -56,6 +59,13 @@ public class UsbAudioDevice {
 
     public interface AudioInputCallback {
         void onAudioData(float[] data, int length);
+        /**
+         * Fired on a worker thread when the capture loop exits without
+         * stopCapture() being called — e.g. the USB device was disconnected
+         * or the kernel returned a null URB. Default is a no-op so existing
+         * callers compile unchanged.
+         */
+        default void onCaptureStopped() {}
     }
 
     /**
@@ -254,6 +264,64 @@ public class UsbAudioDevice {
         if (endpointIn == null) return;
         capturing = true;
 
+        // Prefer the libusb-backed native path. On hosts where Android's
+        // UsbRequest can't drive iso transfers (notably automotive Android
+        // 11 tablets), the UsbRequest fallback below throws
+        // IllegalStateException on first queue. libusb talks to USBDEVFS
+        // directly and works where UsbRequest doesn't.
+        if (UsbAudioNative.isAvailable() && connection != null
+                && streamingInterfaceIn != null) {
+            int fd = connection.getFileDescriptor();
+            int ifaceNum = streamingInterfaceIn.getId();
+            int altSet = streamingInterfaceIn.getAlternateSetting();
+            int epAddr = endpointIn.getAddress();
+            int maxPkt = endpointIn.getMaxPacketSize();
+
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(String.format(
+                    "UsbAudioDevice: trying libusb native capture "
+                            + "fd=%d iface=%d alt=%d ep=0x%02x maxPkt=%d "
+                            + "inputRate=%d ch=%d targetRate=%d",
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    inputSampleRate, inputChannels, targetSampleRate));
+
+            final AudioInputCallback javaCb = callback;
+            long handle = UsbAudioNative.nativeStart(
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    inputSampleRate, inputChannels, /*bytesPerSample=*/2,
+                    targetSampleRate,
+                    new UsbAudioNative.AudioInputCallback() {
+                        @Override
+                        public void onAudioData(float[] data, int length) {
+                            if (capturing && javaCb != null) {
+                                javaCb.onAudioData(data, length);
+                            }
+                        }
+
+                        @Override
+                        public void onCaptureStopped(int code) {
+                            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                                    "UsbAudioDevice: libusb capture stopped, "
+                                            + "code=" + code);
+                            nativeCaptureHandle = 0;
+                            capturing = false;
+                            if (javaCb != null) javaCb.onCaptureStopped();
+                        }
+                    });
+
+            if (handle != 0) {
+                nativeCaptureHandle = handle;
+                com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                        "UsbAudioDevice: libusb capture started OK");
+                return;
+            }
+
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                    "UsbAudioDevice: libusb start FAILED, "
+                            + "falling back to UsbRequest path");
+        }
+
+        // Fallback: original UsbRequest-based loop. Kept so devices that work
+        // with Android's iso path don't regress on the new native lib.
         final int packetSize = endpointIn.getMaxPacketSize();
         final int ratio = inputSampleRate / targetSampleRate;
 
@@ -288,12 +356,23 @@ public class UsbAudioDevice {
             ArrayList<Float> accumulator = new ArrayList<>(inputSampleRate);
             float[] outputBuffer = new float[targetRate]; // 1s max
 
+            int iterations = 0;
             while (capturing) {
                 UsbRequest completed = connection.requestWait();
                 if (completed == null) {
-                    if (capturing) Log.e(TAG, "requestWait returned null");
+                    if (capturing) {
+                        com.bg7yoz.ft8cn.GeneralVariables.fileLog(String.format(
+                                "UsbAudio.captureLoop: requestWait returned null "
+                                        + "after %d iterations (target=%dHz "
+                                        + "input=%dHz channels=%d packetSize=%d "
+                                        + "ratio=%d) — host likely cannot drive "
+                                        + "isochronous transfers via UsbRequest",
+                                iterations, targetRate, inputSampleRate,
+                                inputChannels, packetSize, ratio));
+                    }
                     break;
                 }
+                iterations++;
 
                 int bufIndex = (int) completed.getClientData();
                 ByteBuffer buf = buffers[bufIndex];
@@ -351,7 +430,9 @@ public class UsbAudioDevice {
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Capture loop error: " + e.getMessage());
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                    "UsbAudio.captureLoop: exception — "
+                            + e.getClass().getSimpleName() + ": " + e.getMessage());
         } finally {
             for (int i = 0; i < NUM_URBS; i++) {
                 if (requests[i] != null) {
@@ -359,11 +440,32 @@ public class UsbAudioDevice {
                     try { requests[i].close(); } catch (Exception ignored) {}
                 }
             }
+            // If `capturing` is still true here, we exited without an explicit
+            // stopCapture() — the device died on us. Notify upstream so the
+            // recorder can rebind (e.g. fall back to the built-in mic) instead
+            // of stalling on a dead handle forever.
+            boolean abnormalExit = capturing;
+            capturing = false;
+            if (abnormalExit && callback != null) {
+                final AudioInputCallback cb = callback;
+                new Thread(() -> {
+                    try { cb.onCaptureStopped(); } catch (Exception ignored) {}
+                }, "USB-Audio-Capture-Stopped").start();
+            }
         }
     }
 
     public void stopCapture() {
         capturing = false;
+        long h = nativeCaptureHandle;
+        if (h != 0) {
+            nativeCaptureHandle = 0;
+            try {
+                UsbAudioNative.nativeStop(h);
+            } catch (Throwable t) {
+                Log.w(TAG, "nativeStop threw: " + t.getMessage());
+            }
+        }
     }
 
     /**
@@ -400,6 +502,41 @@ public class UsbAudioDevice {
             }
         }
 
+        // Prefer the libusb-backed native path. Same reason as input: on hosts
+        // where Android's UsbRequest can't drive iso (notably car-dash kernels)
+        // request.initialize() returns false and writeAudio fails immediately,
+        // which aborts the TX after ~200ms. libusb talks to USBDEVFS directly.
+        if (UsbAudioNative.isAvailable() && streamingInterfaceOut != null) {
+            int fd = connection.getFileDescriptor();
+            int ifaceNum = streamingInterfaceOut.getId();
+            int altSet = streamingInterfaceOut.getAlternateSetting();
+            int epAddr = endpointOut.getAddress();
+            int maxPkt = endpointOut.getMaxPacketSize();
+
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(String.format(
+                    "UsbAudioDevice: trying libusb native write "
+                            + "fd=%d iface=%d alt=%d ep=0x%02x maxPkt=%d "
+                            + "bytes=%d outputRate=%d ch=%d",
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    pcmData.length, outputSampleRate, outputChannels));
+
+            int rc = UsbAudioNative.nativeWrite(
+                    fd, ifaceNum, altSet, epAddr, maxPkt,
+                    outputSampleRate, outputChannels, /*bytesPerSample=*/2,
+                    pcmData);
+
+            if (rc == 0) {
+                com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                        "UsbAudioDevice: libusb native write OK");
+                return true;
+            }
+            com.bg7yoz.ft8cn.GeneralVariables.fileLog(
+                    "UsbAudioDevice: libusb native write FAILED rc=" + rc
+                            + ", falling back to UsbRequest");
+        }
+
+        // Fallback: original UsbRequest-based write. Kept so devices that work
+        // through Android's iso path don't regress on the new native lib.
         // Write in chunks matching max packet size
         int packetSize = endpointOut.getMaxPacketSize();
         int offset = 0;
@@ -411,23 +548,40 @@ public class UsbAudioDevice {
             buf.put(pcmData, offset, chunkSize);
             buf.flip();
 
+            // Whole iteration is guarded: if the underlying USB connection has
+            // been torn down (cable yanked, kernel renumeration, selective
+            // suspend), initialize() returns false and queue()/requestWait()
+            // throw IllegalStateException. Catching here turns a fatal process
+            // crash into a clean TX abort that the caller already handles.
             UsbRequest request = new UsbRequest();
-            request.initialize(connection, endpointOut);
-            boolean queued;
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                queued = request.queue(buf);
-            } else {
-                queued = request.queue(buf, chunkSize);
-            }
-            if (!queued) {
-                Log.e(TAG, "Failed to queue output URB at offset " + offset);
-                request.close();
-                return false;
-            }
+            try {
+                if (!request.initialize(connection, endpointOut)) {
+                    Log.e(TAG, "request.initialize returned false at offset " + offset
+                            + " (USB connection likely closed)");
+                    try { request.close(); } catch (Exception ignored) {}
+                    return false;
+                }
 
-            UsbRequest completed = connection.requestWait();
-            if (completed != null) {
-                completed.close();
+                boolean queued;
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    queued = request.queue(buf);
+                } else {
+                    queued = request.queue(buf, chunkSize);
+                }
+                if (!queued) {
+                    Log.e(TAG, "Failed to queue output URB at offset " + offset);
+                    try { request.close(); } catch (Exception ignored) {}
+                    return false;
+                }
+
+                UsbRequest completed = connection.requestWait();
+                if (completed != null) {
+                    try { completed.close(); } catch (Exception ignored) {}
+                }
+            } catch (IllegalStateException | NullPointerException e) {
+                Log.e(TAG, "writeAudio aborting at offset " + offset + ": " + e.getMessage());
+                try { request.close(); } catch (Exception ignored) {}
+                return false;
             }
 
             offset += chunkSize;
@@ -537,7 +691,7 @@ public class UsbAudioDevice {
                 name = String.format("USB Audio [%04X:%04X]",
                         device.getVendorId(), device.getProductId());
             }
-            return name + " (USB)";
+            return name + " (USB direct)";
         }
     }
 }

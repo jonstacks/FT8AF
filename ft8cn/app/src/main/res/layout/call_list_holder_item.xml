@@ -15,6 +15,15 @@
     android:foreground="?attr/selectableItemBackground"
     tools:ignore="TouchTargetSizeCheck">
 
+    <View
+        android:id="@+id/workedStateStripeView"
+        android:layout_width="6dp"
+        android:layout_height="0dp"
+        android:background="@color/stripe_none"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <TextView
         android:id="@+id/callListMessageTextView"
         android:layout_width="0dp"
@@ -96,7 +105,7 @@
         android:layout_marginStart="4dp"
         android:textSize="12sp"
         app:layout_constraintBottom_toBottomOf="@+id/callListMessageTextView"
-        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/workedStateStripeView"
         app:layout_constraintTop_toTopOf="@+id/callListMessageTextView"
         tools:ignore="TextContrastCheck"
         tools:text="0" />
@@ -114,7 +123,7 @@
         android:layout_height="wrap_content"
         android:textSize="10sp"
         app:layout_constraintBottom_toBottomOf="@+id/linearLayout"
-        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/workedStateStripeView"
         app:layout_constraintTop_toTopOf="@+id/linearLayout"
         tools:ignore="SmallSp"
         tools:text="123456" />
@@ -253,7 +262,7 @@
         android:layout_width="10dp"
         android:layout_height="10dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/workedStateStripeView"
         app:layout_constraintTop_toTopOf="@+id/callingListSequenceTextView"
         app:srcCompat="@drawable/is_weak_signal_24"
         tools:ignore="ContentDescription,ImageContrastCheck" />

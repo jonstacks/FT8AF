@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 
 <resources>
-    <string name="app_name">FT8CN</string>
+    <string name="app_name">FT8AF</string>
 
     <string name="nav_menu_title_call_list">コンテンツ</string>
 
@@ -71,7 +71,7 @@
 
     <string name="scroll_down">▾</string>
 
-    <string name="about_me">FT8CNについて</string>
+    <string name="about_me">FT8AFについて</string>
 
     <string name="connectMode">PTT方法</string>
 
@@ -97,7 +97,7 @@
 
     <string name="debug">デバッグ</string>
 
-    <string name="logo_image">FT8CN</string>
+    <string name="logo_image">FT8AF</string>
 
     <string name="RTS">RTS</string>
 
@@ -161,7 +161,7 @@
     >
     <string name="bluetooth_Headset_mode_cancelled">Bluetoothヘッドホンモードから切断</string>
     >
-    <string name="version_info">FT8CNバージョン %s\nBG7YOZ\n%s</string>
+    <string name="version_info">FT8AFバージョン %s\nBG7YOZ\n%s</string>
     >
     <string name="exit">アプリを終了</string>
     >

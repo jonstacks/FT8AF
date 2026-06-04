@@ -26,6 +26,7 @@ public class InstructionSet {
     public static final int XIEGU_6100_FT8CNS=20;//XieGu 6100 ft8cns version
     public static final int YAESU_847=21;//Ft-847
     public static final int ICOM_756=22;//Ft-847
+    public static final int YAESU_FT710=23;//FT-710, currently reuses DX10 instruction set; CAT read loop must stay off
 
 
 

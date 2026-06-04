@@ -14,6 +14,8 @@ import android.graphics.Shader;
 import android.util.AttributeSet;
 import android.view.View;
 
+import com.bg7yoz.ft8cn.GeneralVariables;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,6 +26,8 @@ import java.util.List;
  */
 public class ColumnarView extends View {
     private static final String TAG = "ColumnarView";
+    private static final float FT8_SIGNAL_BANDWIDTH_HZ = 50f;
+
     // Width of each bar
     private int width;
     // Spacing between each bar
@@ -40,12 +44,19 @@ public class ColumnarView extends View {
     private final List<Rect> newData = new ArrayList<>();
     private final List<Rect> blockData = new ArrayList<>();
 
+    private int spectrumWidth = 3500;//Spectrum display width in Hz
+
     private Bitmap lastBitMap=null;
     private Canvas _canvas;
     private Paint linePaint;
     private int touch_x = -1;
     private Paint touchPaint;
     private int freq_hz=-1;
+
+    // TX frequency marker overlay
+    private float txFrequency = -1f;
+    private boolean txActive = false;
+    private final Paint txMarkerPaint = new Paint();
 
     public void setBlockSpeed(int blockSpeed) {
         this.blockSpeed = blockSpeed;
@@ -75,12 +86,18 @@ public class ColumnarView extends View {
         if (data.length <= 0) {
             return;
         }
-        width = getWidth() / (data.length / 2);// 960/2=480, 480 is reasonable; 906 cannot be displayed.
+        // Calculate how many FFT bins correspond to spectrumWidth Hz.
+        // The full data array covers 0 to Nyquist (sampleRate/2).
+        float nyquist = GeneralVariables.audioSampleRate / 2f;
+        int binsToShow = Math.min(data.length, Math.round((float) spectrumWidth / nyquist * data.length));
+        if (binsToShow <= 0) binsToShow = data.length / 2;
+
+        width = getWidth() / binsToShow;
         if (drawblock) {// Whether to show the peak block
             if (newData.size() > 0) {
                 if (blockData.size() == 0 || newData.size() != blockData.size()) {
                     blockData.clear();
-                    for (int i = 0; i < data.length / 2; i++) {
+                    for (int i = 0; i < binsToShow; i++) {
                         Rect blockRect = new Rect();
                         blockRect.top =getHeight()- blockHeight;
                         blockRect.bottom = getHeight();
@@ -101,14 +118,15 @@ public class ColumnarView extends View {
         }
         newData.clear();
         float rateHeight =  0.95f * getHeight() / 256;// 0.95 is the ratio; max bar height does not exceed 95%
-        for (int i = 0; i < data.length / 2; i++) {
+        for (int i = 0; i < binsToShow; i++) {
             Rect colRect = new Rect();
             if (newData.size() == 0) {
                 colRect.left = 0;
             } else {
-                colRect.left = i * getWidth() / (data.length / 2);
+                colRect.left = i * getWidth() / binsToShow;
             }
-            colRect.top = getHeight() - Math.round(Math.max(data[i], data[i + 1]) * rateHeight);
+            int val = (i + 1 < data.length) ? Math.max(data[i], data[i + 1]) : data[i];
+            colRect.top = getHeight() - Math.round(val * rateHeight);
             colRect.right = colRect.left + width - spacing;
             colRect.bottom = getHeight();
             newData.add(colRect);
@@ -132,6 +150,9 @@ public class ColumnarView extends View {
         touchPaint = new Paint();
         touchPaint.setColor(0xff00ffff);
         touchPaint.setStrokeWidth(2);
+
+        txMarkerPaint.setStrokeWidth(1.5f * getResources().getDisplayMetrics().density);
+        txMarkerPaint.setStyle(Paint.Style.STROKE);
     }
 
     @Override
@@ -149,10 +170,24 @@ public class ColumnarView extends View {
         canvas.drawBitmap(lastBitMap,0,0,null);
         if (touch_x>0) {
             // Calculate frequency
-            freq_hz = Math.round(3000f * (float) touch_x / (float) getWidth());
+            freq_hz = Math.round((float) spectrumWidth * (float) touch_x / (float) getWidth());
             canvas.drawLine(touch_x, 0, touch_x, getHeight(), touchPaint);
         }
-        invalidate();
+
+        // Draw TX frequency marker lines
+        if (txFrequency > 0 && getWidth() > 0) {
+            txMarkerPaint.setColor(0xFFEF4444);
+            float freqWidth = (float) getWidth() / spectrumWidth;
+            float halfBw = FT8_SIGNAL_BANDWIDTH_HZ / 2f;
+            float x1 = (txFrequency - halfBw) * freqWidth;
+            float x2 = (txFrequency + halfBw) * freqWidth;
+            canvas.drawLine(x1, 0, x1, getHeight(), txMarkerPaint);
+            canvas.drawLine(x2, 0, x2, getHeight(), txMarkerPaint);
+        }
+
+        // Do NOT call invalidate() here — the view is invalidated externally
+        // when new data arrives. Self-invalidation causes layout thrashing
+        // in Compose's AndroidView.
     }
     public void setTouch_x(int touch_x) {
         this.touch_x = touch_x;
@@ -160,5 +195,17 @@ public class ColumnarView extends View {
 
     public int getFreq_hz() {
         return freq_hz;
+    }
+
+    public void setTxFrequency(float freq) {
+        this.txFrequency = freq;
+    }
+
+    public void setTxActive(boolean active) {
+        this.txActive = active;
+    }
+
+    public void setSpectrumWidth(int width) {
+        this.spectrumWidth = width;
     }
 }
