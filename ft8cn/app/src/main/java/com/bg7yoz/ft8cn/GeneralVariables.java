@@ -38,6 +38,7 @@ public class GeneralVariables {
     public static boolean saveSWL_QSO = false;//Save QSOs from decoded messages switch
     public static boolean enableCloudlog = false;//Whether Cloudlog auto-sync is enabled
     public static boolean enableQRZ = false;//Whether QRZ auto-sync is enabled
+    public static boolean enablePskReporter = true;//Whether PSKReporter spot upload is enabled
 
     public static boolean deepDecodeMode = false;//Whether deep decode mode is enabled
 

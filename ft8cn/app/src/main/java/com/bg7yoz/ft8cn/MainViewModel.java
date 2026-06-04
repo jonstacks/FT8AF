@@ -98,6 +98,8 @@ import com.bg7yoz.ft8cn.wave.HamRecorder;
 import com.bg7yoz.ft8cn.wave.OnGetVoiceDataDone;
 import com.bg7yoz.ft8cn.x6100.X6100Radio;
 
+import radio.ks3ckc.ft8us.pskreporter.PskReporterSender;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -359,6 +361,9 @@ public class MainViewModel extends ViewModel {
                 }
                 //find callsign-to-grid mapping from the list and add to the table
                 getCallsignAndGrid(messages);
+
+                //upload decoded spots to PSKReporter
+                PskReporterSender.INSTANCE.enqueue(messages);
             }
         });
 
@@ -371,6 +376,9 @@ public class MainViewModel extends ViewModel {
 
 
         ft8SignalListener.startListen();
+
+        //start PSKReporter spot upload sender
+        PskReporterSender.INSTANCE.start();
 
         //spectrum listener object
         spectrumListener = new SpectrumListener(hamRecorder);
@@ -1091,6 +1099,12 @@ public class MainViewModel extends ViewModel {
                 baseRig.sendWaveData(message);//actual generated data is 12.64+0.04 seconds; 0.04 is zero-padded data
             }
         }
+    }
+
+    @Override
+    protected void onCleared() {
+        super.onCleared();
+        PskReporterSender.INSTANCE.stop();
     }
 
 }
